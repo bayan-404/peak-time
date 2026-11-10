@@ -37,7 +37,7 @@ export default function Heatmap({ heatmap, counts, blockHours }: Props) {
                       ? `${day} ${formatHour(h)}: no posts`
                       : `${day} ${formatHour(h)}: ${counts[d][h]} post(s)`
                   }
-                  className="aspect-square rounded-sm border border-black/5 dark:border-white/10"
+                  className="h-7 rounded-sm border border-black/5 dark:border-white/10"
                   style={{
                     background:
                       v === null

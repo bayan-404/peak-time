@@ -59,10 +59,12 @@ lib/types.ts                  Shared types
 |---|---|---|
 | 1 | `account → organizations { id }` | Get `organizationId` |
 | 2 | `channels(input: { organizationId })` | Fill the channel picker |
-| 3 | `posts(...)` filtered to sent + channel, with metrics, paginated | Raw data |
+| 3 | `posts(first, after, input: { organizationId, filter: { status: [sent], channelIds } })` → `sentAt`, `metrics { type value }`, `metricsUpdatedAt` | Raw data (100/page, max 10 pages) |
 | 4 (optional) | `createPost` mutation | Schedule at peak time |
 
 GraphQL returns HTTP 200 even on errors, so `bufferQuery()` checks the `errors` array.
+
+Metric names differ per network, so `toSample()` normalizes them: `reactions|likes`, `comments`, `shares|reposts`, `impressions|views|reach`.
 
 **Constraints:**
 - Metrics refresh **daily**, so data can lag ~24h. Show "last updated".
@@ -80,7 +82,7 @@ GraphQL returns HTTP 200 even on errors, so `bufferQuery()` checks the `errors` 
 ## 7. Status
 
 - [x] Scaffold, analysis logic, demo mode, heatmap UI
-- [ ] Wire `lib/buffer.ts` queries (waiting on Post fields from the API Reference)
-- [ ] Live mode toggle + error/empty states
-- [ ] 10-min cache
+- [x] Live Buffer data (`account`, `channels`, `posts` with `metrics`)
+- [x] Demo / My Buffer toggle + error/empty states
+- [x] 10-min in-memory cache (`lib/cache.ts`)
 - [ ] Deploy to Vercel + README screenshots

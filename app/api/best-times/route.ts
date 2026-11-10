@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 import { analyzePosts } from "@/lib/analyze";
+import { errorResponse } from "@/lib/api-error";
+import { getOrganizationId, getSentPosts } from "@/lib/buffer";
+import { cached } from "@/lib/cache";
 import { demoPosts } from "@/lib/demo-data";
 
 export async function GET(req: Request) {
@@ -19,11 +22,15 @@ export async function GET(req: Request) {
     return NextResponse.json(analyzePosts(demoPosts(channelId), tz));
   }
 
-  // TODO: fetch sent posts + metrics via lib/buffer.ts, cache ~10 min, then analyzePosts().
-  return NextResponse.json(
-    { error: "Live Buffer data not wired up yet. Try ?demo=1" },
-    { status: 501 },
-  );
+  try {
+    // Cache the raw posts (not the analysis) so each timezone reuses one fetch.
+    const { posts, metricsUpdatedAt } = await cached(`posts:${channelId}`, async () =>
+      getSentPosts(await getOrganizationId(), channelId),
+    );
+    return NextResponse.json({ ...analyzePosts(posts, tz), metricsUpdatedAt });
+  } catch (e) {
+    return errorResponse(e);
+  }
 }
 
 function isValidTimeZone(tz: string) {
