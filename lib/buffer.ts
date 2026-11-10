@@ -25,9 +25,11 @@ export class BufferApiError extends Error {
 export async function bufferQuery<T>(
   query: string,
   variables?: Record<string, unknown>,
+  token?: string | null,
 ): Promise<T> {
-  const key = process.env.BUFFER_API_KEY;
-  if (!key) throw new BufferApiError("BUFFER_API_KEY is not set", "NO_KEY");
+  // OAuth user token when connected; personal key only as a dev fallback.
+  const key = token ?? process.env.BUFFER_API_KEY;
+  if (!key) throw new BufferApiError("Not connected to Buffer", "NO_KEY");
 
   const res = await fetch(BUFFER_API_URL, {
     method: "POST",
@@ -50,16 +52,16 @@ export async function bufferQuery<T>(
 }
 
 /** First organization on the account. Most creators have exactly one. */
-export async function getOrganizationId(): Promise<string> {
+export async function getOrganizationId(token?: string | null): Promise<string> {
   const data = await bufferQuery<{
     account: { organizations: { id: string }[] };
-  }>(`query { account { organizations { id } } }`);
+  }>(`query { account { organizations { id } } }`, undefined, token);
   const org = data.account.organizations[0];
   if (!org) throw new BufferApiError("No Buffer organization found", "NO_ORG");
   return org.id;
 }
 
-export async function getChannels(organizationId: string): Promise<Channel[]> {
+export async function getChannels(organizationId: string, token?: string | null): Promise<Channel[]> {
   const data = await bufferQuery<{
     channels: {
       id: string;
@@ -76,6 +78,7 @@ export async function getChannels(organizationId: string): Promise<Channel[]> {
       }
     }`,
     { organizationId },
+    token,
   );
   return data.channels
     .filter((c) => !c.isDisconnected)
@@ -157,4 +160,31 @@ function toSample(node: RawPost): PostSample {
     shares: first("shares", "reposts"),
     impressions: first("impressions", "views", "reach"),
   };
+}
+
+export type ScheduledPost = { id: string; status: string; dueAt: string | null; text: string; channelId: string };
+
+/** Schedules one post at an exact time (mode: customScheduled + dueAt). */
+export async function createScheduledPost(
+  token: string,
+  input: { channelId: string; text: string; dueAt: string },
+): Promise<ScheduledPost> {
+  const data = await bufferQuery<{
+    createPost: { __typename: string; post?: ScheduledPost; message?: string };
+  }>(
+    `mutation CreatePost($input: CreatePostInput!) {
+      createPost(input: $input) {
+        __typename
+        ... on PostActionSuccess { post { id status dueAt text channelId } }
+        ... on MutationError { message }
+      }
+    }`,
+    { input: { ...input, schedulingType: "automatic", mode: "customScheduled" } },
+    token,
+  );
+  // Mutation failures come back as a union member, not in `errors`.
+  if (!data.createPost.post) {
+    throw new BufferApiError(data.createPost.message ?? "createPost failed", "MUTATION");
+  }
+  return data.createPost.post;
 }
