@@ -10,7 +10,7 @@ import { readSession, writeSession, type Session } from "./session";
 const AUTHORIZE_URL = "https://auth.buffer.com/auth";
 const TOKEN_URL = "https://auth.buffer.com/token";
 export const SCOPES = "posts:read posts:write account:read offline_access";
-const REFRESH_EARLY_MS = 60_000; // refresh a minute before expiry
+const REFRESH_EARLY_MS = 5 * 60_000; // refresh early so a schedule-all run never crosses expiry
 
 function clientCreds() {
   const id = process.env.BUFFER_CLIENT_ID;
