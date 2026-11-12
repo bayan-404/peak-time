@@ -1,14 +1,69 @@
-// Pure series helpers (no I/O), safe to import from client components.
+// Series model + pure helpers (no I/O), safe to import from client components.
 
 export const DEFAULT_TEMPLATE = "Day {n}/{total} {text}";
 export const CHECK_IN_TEXT = "Showing up today. ✅";
+export const MAX_DAYS = 365;
+
+export type Series = {
+  id: string;
+  name: string;
+  total: number; // number of days
+  startDate: string; // "YYYY-MM-DD", in `timezone`
+  time: string; // "HH:MM" daily post time, in `timezone`
+  timezone: string; // IANA zone of the creator's browser at creation
+  channelIds: string[];
+  template: string;
+  notes: Record<number, string>; // day number → note (missing/empty = check-in)
+  // `${day}:${channelId}` → the Buffer post we created for it
+  posts: Record<string, { postId: string; dueAt: string }>;
+  createdAt: string;
+};
+
+export type PlanItem = { key: string; day: number; channelId: string; text: string; dueAt: string };
+
+export const dayKey = (day: number, channelId: string) => `${day}:${channelId}`;
 
 /** "Day {n}/{total} {text}" → "Day 1/30 Shipped the login flow". Empty note → check-in. */
-export function renderDay(template: string, n: number, total: number, note: string) {
-  const text = note.trim() || CHECK_IN_TEXT;
+export function renderDay(template: string, n: number, total: number, note: string | undefined) {
+  const text = note?.trim() || CHECK_IN_TEXT;
   return template
     .replaceAll("{n}", String(n))
     .replaceAll("{total}", String(total))
     .replaceAll("{text}", text)
     .trim();
+}
+
+/**
+ * When day `n` posts. Built with local Date parts, so it's correct across
+ * DST changes as long as it runs in the series' timezone (the browser).
+ */
+export function dueAtFor(s: Pick<Series, "startDate" | "time">, n: number): Date {
+  const [y, m, d] = s.startDate.split("-").map(Number);
+  const [hh, mm] = s.time.split(":").map(Number);
+  return new Date(y, m - 1, d + n - 1, hh, mm);
+}
+
+/**
+ * What still needs scheduling. Idempotent: days already in `posts` are skipped,
+ * so "Schedule all" can be clicked again to retry only the failures.
+ */
+export function schedulePlan(s: Series, now = Date.now()) {
+  const items: PlanItem[] = [];
+  let past = 0;
+  let done = 0;
+  for (let n = 1; n <= s.total; n++) {
+    const due = dueAtFor(s, n);
+    for (const channelId of s.channelIds) {
+      const key = dayKey(n, channelId);
+      if (s.posts[key]) done++;
+      else if (due.getTime() <= now) past++;
+      else items.push({ key, day: n, channelId, text: renderDay(s.template, n, s.total, s.notes[n]), dueAt: due.toISOString() });
+    }
+  }
+  return { items, past, done };
+}
+
+export function toDateInput(d: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
