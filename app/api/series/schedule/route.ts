@@ -8,9 +8,16 @@ import { getAccessToken } from "@/lib/oauth";
 const MAX_BATCH = 10;
 
 type Item = { key: string; channelId: string; text: string; dueAt: string };
-type ScheduleResult = { key: string; postId?: string; dueAt?: string; error?: string };
+// `unknown`: we never heard back from Buffer, so the post may or may not exist.
+type ScheduleResult = { key: string; postId?: string; dueAt?: string; error?: string; unknown?: boolean };
 
-/** POST { items: Item[] } → { results: ScheduleResult[] } (one per item, same order). */
+/**
+ * POST { items: Item[] } → { results: ScheduleResult[], retryAfter: number | null }
+ *
+ * Results are in item order but can be shorter than `items`: the batch stops
+ * early at a rate limit (`retryAfter` = seconds to wait) or at an unknown
+ * outcome. Items without a result were never sent to Buffer.
+ */
 export async function POST(req: Request) {
   const token = await getAccessToken().catch(() => null);
   if (!token) return NextResponse.json({ error: "Connect Buffer first." }, { status: 401 });
@@ -22,6 +29,7 @@ export async function POST(req: Request) {
   }
 
   const results: ScheduleResult[] = [];
+  let retryAfter: number | null = null;
   // Sequential on purpose: Buffer's rate limit is shared per client.
   for (const it of items) {
     const when = Date.parse(it?.dueAt);
@@ -34,17 +42,33 @@ export async function POST(req: Request) {
       continue;
     }
     try {
-      const post = await createScheduledPost(token, {
+      const { post, lowQuota } = await createScheduledPost(token, {
         channelId: it.channelId,
         text: it.text.trim(),
         dueAt: new Date(when).toISOString(),
       });
       results.push({ key: it.key, postId: post.id, dueAt: post.dueAt ?? it.dueAt });
+      // Nearly out of quota: stop here instead of running into a 429.
+      if (lowQuota !== null) {
+        retryAfter = lowQuota;
+        break;
+      }
     } catch (e) {
+      // A 429 means this post was not created. Sending the rest would only hit the same wall.
+      if (e instanceof BufferApiError && e.code === "RATE_LIMITED") {
+        retryAfter = e.info.retryAfter ?? 0;
+        break;
+      }
       console.error(e);
+      // A network failure or 5xx doesn't say whether Buffer saved the post.
+      // Never retry that blindly: the client checks Buffer first.
+      if (!(e instanceof BufferApiError) || (e.info.status ?? 0) >= 500) {
+        results.push({ key: it.key, unknown: true, error: "No clear answer from Buffer." });
+        break;
+      }
       // Buffer's own messages (plan limits, text too long…) are useful to the user.
-      results.push({ key: it.key, error: e instanceof BufferApiError ? e.message : "Buffer rejected the post." });
+      results.push({ key: it.key, error: e.message });
     }
   }
-  return NextResponse.json({ results });
+  return NextResponse.json({ results, retryAfter });
 }

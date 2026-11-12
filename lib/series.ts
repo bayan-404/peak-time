@@ -16,6 +16,9 @@ export type Series = {
   notes: Record<number, string>; // day number → note (missing/empty = check-in)
   // `${day}:${channelId}` → the Buffer post we created for it
   posts: Record<string, { postId: string; dueAt: string }>;
+  // Keys sent to Buffer whose outcome we never heard (dropped connection,
+  // closed tab). Checked against Buffer before anything is created again.
+  pending?: string[];
   createdAt: string;
 };
 
@@ -66,4 +69,12 @@ export function schedulePlan(s: Series, now = Date.now()) {
 export function toDateInput(d: Date) {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** 753 → "13 minutes". For telling the user how long a rate limit lasts. */
+export function formatWait(seconds: number) {
+  const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+  if (seconds < 3600) return plural(Math.max(1, Math.ceil(seconds / 60)), "minute");
+  if (seconds < 86400) return plural(Math.ceil(seconds / 3600), "hour");
+  return plural(Math.ceil(seconds / 86400), "day");
 }
