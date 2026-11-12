@@ -4,7 +4,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { DEFAULT_TEMPLATE, MAX_DAYS, renderDay, toDateInput, type Series } from "@/lib/series";
+import { DEFAULT_TEMPLATE, MAX_DAYS, renderDay, seriesProblems, toDateInput, type Series } from "@/lib/series";
 import { deleteSeries, loadAll, saveSeries } from "@/lib/series-store";
 import type { Channel } from "@/lib/types";
 
@@ -54,8 +54,12 @@ export default function SeriesListPage() {
     setChannelIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
   }
 
+  // Recomputed on every render, so the messages update as the user types.
+  const problems = seriesProblems({ startDate, time, channelIds, template });
+
   function create(e: React.FormEvent) {
     e.preventDefault();
+    if (problems.length > 0) return;
     const s: Series = {
       id: crypto.randomUUID(),
       name: name.trim() || `${total}-day series`,
@@ -147,7 +151,14 @@ export default function SeriesListPage() {
             </label>
             <label className="block space-y-1">
               <span className="text-sm">Start</span>
-              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={input} required />
+              <input
+                type="date"
+                value={startDate}
+                min={toDateInput(new Date())}
+                onChange={(e) => setStartDate(e.target.value)}
+                className={input}
+                required
+              />
             </label>
             <label className="block space-y-1">
               <span className="text-sm">Time</span>
@@ -173,8 +184,16 @@ export default function SeriesListPage() {
           </label>
           <p className="rounded-xl border p-3 text-sm opacity-80">{renderDay(template, 1, total, "")}</p>
 
+          {problems.length > 0 && (
+            <ul role="alert" className="space-y-1 text-sm text-red-600">
+              {problems.map((p) => (
+                <li key={p}>{p}</li>
+              ))}
+            </ul>
+          )}
+
           <button
-            disabled={channelIds.length === 0 || !template.includes("{n}")}
+            disabled={problems.length > 0}
             className="rounded-md bg-[var(--accent)] px-4 py-2 text-white disabled:opacity-50"
           >
             Create series
