@@ -21,7 +21,9 @@ function clientCreds() {
 }
 
 export function redirectUri(origin: string) {
-  return process.env.BUFFER_REDIRECT_URI ?? `${origin}/api/auth/callback`;
+  // Buffer compares this character for character, so a stray space or newline
+  // pasted into the env var breaks login with a generic "could not connect" page.
+  return process.env.BUFFER_REDIRECT_URI?.trim() || `${origin}/api/auth/callback`;
 }
 
 // ---------- PKCE ----------
