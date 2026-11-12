@@ -12,7 +12,7 @@ export async function GET(req: Request) {
   const missing = ["BUFFER_CLIENT_ID", "BUFFER_CLIENT_SECRET", "SESSION_SECRET"].filter((k) => !process.env[k]);
   if (missing.length) {
     return new NextResponse(
-      `Missing in .env.local: ${missing.join(", ")}. Add them, then restart "npm run dev".`,
+      `Missing env vars: ${missing.join(", ")}. Local: add them to .env.local and restart. Deployed: add them in your host's settings and redeploy.`,
       { status: 500 },
     );
   }

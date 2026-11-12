@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PeakTime",
-  description: "Find your best time to post, from your own Buffer analytics.",
+  title: "Streakline",
+  description: "Plan and schedule \"Day N of X\" series to Buffer.",
 };
 
 export default function RootLayout({
