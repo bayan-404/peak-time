@@ -234,6 +234,34 @@ export async function createScheduledPost(
 }
 
 /**
+ * Moves a scheduled post to a new time, keeping its text. Safe to repeat:
+ * sending the same time twice changes nothing.
+ */
+export async function moveScheduledPost(
+  token: string,
+  input: { id: string; dueAt: string },
+): Promise<{ dueAt: string; lowQuota: number | null }> {
+  const { data, lowQuota } = await bufferRequest<{
+    editPost: { __typename: string; post?: { id: string; dueAt: string | null }; message?: string };
+  }>(
+    `mutation MovePost($input: EditPostInput!) {
+      editPost(input: $input) {
+        __typename
+        ... on PostActionSuccess { post { id dueAt } }
+        ... on MutationError { message }
+      }
+    }`,
+    // Text is omitted on purpose: Buffer keeps the current text when it is left out.
+    { input: { ...input, mode: "customScheduled" } },
+    token,
+  );
+  if (!data.editPost.post) {
+    throw new BufferApiError(data.editPost.message ?? "editPost failed", "MUTATION");
+  }
+  return { dueAt: data.editPost.post.dueAt ?? input.dueAt, lowQuota };
+}
+
+/**
  * Scheduled posts on these channels due between `start` and `end` (ISO).
  * createPost has no idempotency key, so this is how we find out whether a
  * write with an unknown outcome reached Buffer before creating it again.

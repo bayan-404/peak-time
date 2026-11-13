@@ -19,6 +19,9 @@ export type Series = {
   // Keys sent to Buffer whose outcome we never heard (dropped connection,
   // closed tab). Checked against Buffer before anything is created again.
   pending?: string[];
+  // Day numbers that were pushed back by one day ("I didn't show up").
+  // Each entry delays that day and every day after it; a day can appear twice.
+  skips?: number[];
   createdAt: string;
 };
 
@@ -40,10 +43,42 @@ export function renderDay(template: string, n: number, total: number, note: stri
  * When day `n` posts. Built with local Date parts, so it's correct across
  * DST changes as long as it runs in the series' timezone (the browser).
  */
-export function dueAtFor(s: Pick<Series, "startDate" | "time">, n: number): Date {
+export function dueAtFor(s: Pick<Series, "startDate" | "time" | "skips">, n: number): Date {
   const [y, m, d] = s.startDate.split("-").map(Number);
   const [hh, mm] = s.time.split(":").map(Number);
-  return new Date(y, m - 1, d + n - 1, hh, mm);
+  // Every skip at or before day n moved it one day later.
+  const delay = (s.skips ?? []).filter((k) => k <= n).length;
+  return new Date(y, m - 1, d + n - 1 + delay, hh, mm);
+}
+
+/** Pushes day `n` and every later day back by one day. No day is dropped. */
+export function skipDay(s: Series, n: number): Series {
+  return { ...s, skips: [...(s.skips ?? []), n] };
+}
+
+export type MoveItem = { key: string; postId: string; dueAt: string };
+
+const sameMinute = (a: string, b: Date) => Math.floor(Date.parse(a) / 60000) === Math.floor(b.getTime() / 60000);
+
+/**
+ * Posts already in Buffer whose time no longer matches the plan (after a skip).
+ * Idempotent like schedulePlan: a post drops off this list once it is moved,
+ * so an interrupted run can simply be continued. Earliest day first, because
+ * that is the post closest to going out.
+ */
+export function movePlan(s: Series, now = Date.now()): MoveItem[] {
+  const items: MoveItem[] = [];
+  for (let n = 1; n <= s.total; n++) {
+    const due = dueAtFor(s, n);
+    for (const channelId of s.channelIds) {
+      const key = dayKey(n, channelId);
+      const post = s.posts[key];
+      // A post whose old time has passed was already published: nothing to move.
+      if (!post || Date.parse(post.dueAt) <= now || sameMinute(post.dueAt, due)) continue;
+      items.push({ key, postId: post.postId, dueAt: due.toISOString() });
+    }
+  }
+  return items;
 }
 
 /**
