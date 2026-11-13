@@ -24,6 +24,7 @@ import {
 } from "@/lib/series";
 import { getSeries, saveSeries } from "@/lib/series-store";
 import type { Channel } from "@/lib/types";
+import NoteField from "@/components/NoteField";
 
 const BATCH = 10; // must match the API's MAX_BATCH
 type Result = { key: string; postId?: string; dueAt?: string; error?: string; unknown?: boolean };
@@ -422,13 +423,12 @@ export default function SeriesDetailPage() {
                   })}
                 </span>
               </div>
-              <textarea
+              <NoteField
                 value={series.notes[n] ?? ""}
-                onChange={(e) => setNote(n, e.target.value)}
+                onChange={(note) => setNote(n, note)}
                 disabled={locked || past}
-                rows={2}
+                label={`Note for day ${n}`}
                 placeholder={CHECK_IN_TEXT}
-                className="w-full rounded-md border px-3 py-2 bg-transparent text-sm disabled:opacity-60"
               />
               <p className="text-xs opacity-60 whitespace-pre-wrap">{renderDay(series.template, n, series.total, series.notes[n])}</p>
               {keys.map((k) => failures[k] && <p key={k} className="text-xs text-red-600">{failures[k]}</p>)}
