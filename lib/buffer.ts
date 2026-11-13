@@ -1,7 +1,7 @@
 // Server-only Buffer GraphQL client.
-// Never import this from a client component: it reads the secret API key.
+// Never import this from a client component: it handles the user's access token.
 import "server-only";
-import type { Channel, PostSample } from "./types";
+import type { Channel } from "./types";
 
 const BUFFER_API_URL = "https://api.buffer.com";
 const PAGE_SIZE = 100;
@@ -45,11 +45,7 @@ function lowQuotaSeconds(header: string | null): number | null {
 }
 
 /** Sends one GraphQL query to Buffer and returns only the data. */
-export async function bufferQuery<T>(
-  query: string,
-  variables?: Record<string, unknown>,
-  token?: string | null,
-): Promise<T> {
+async function bufferQuery<T>(query: string, variables: Record<string, unknown> | undefined, token: string): Promise<T> {
   return (await bufferRequest<T>(query, variables, token)).data;
 }
 
@@ -60,18 +56,14 @@ export async function bufferQuery<T>(
  */
 async function bufferRequest<T>(
   query: string,
-  variables?: Record<string, unknown>,
-  token?: string | null,
+  variables: Record<string, unknown> | undefined,
+  token: string,
 ): Promise<{ data: T; lowQuota: number | null }> {
-  // OAuth user token when connected; personal key only as a dev fallback.
-  const key = token ?? process.env.BUFFER_API_KEY;
-  if (!key) throw new BufferApiError("Not connected to Buffer", "NO_KEY");
-
   const res = await fetch(BUFFER_API_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
+      Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ query, variables }),
     cache: "no-store",
@@ -93,7 +85,7 @@ async function bufferRequest<T>(
 }
 
 /** First organization on the account. Most creators have exactly one. */
-export async function getOrganizationId(token?: string | null): Promise<string> {
+export async function getOrganizationId(token: string): Promise<string> {
   const data = await bufferQuery<{
     account: { organizations: { id: string }[] };
   }>(`query { account { organizations { id } } }`, undefined, token);
@@ -102,7 +94,7 @@ export async function getOrganizationId(token?: string | null): Promise<string> 
   return org.id;
 }
 
-export async function getChannels(organizationId: string, token?: string | null): Promise<Channel[]> {
+export async function getChannels(organizationId: string, token: string): Promise<Channel[]> {
   const data = await bufferQuery<{
     channels: {
       id: string;
@@ -129,78 +121,6 @@ export async function getChannels(organizationId: string, token?: string | null)
       service: c.service,
       avatar: c.avatar,
     }));
-}
-
-type RawPost = {
-  id: string;
-  sentAt: string | null;
-  metricsUpdatedAt: string | null;
-  metrics: { type: string; value: number }[] | null;
-};
-
-/** All sent posts for one channel, mapped into our own PostSample shape. */
-export async function getSentPosts(
-  organizationId: string,
-  channelId: string,
-): Promise<{ posts: PostSample[]; metricsUpdatedAt: string | null }> {
-  const posts: PostSample[] = [];
-  let metricsUpdatedAt: string | null = null;
-  let after: string | null = null;
-
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const data: {
-      posts: {
-        pageInfo: { hasNextPage: boolean; endCursor: string | null };
-        edges: { node: RawPost }[] | null;
-      };
-    } = await bufferQuery(
-      `query SentPosts($organizationId: OrganizationId!, $channelIds: [ChannelId!], $first: Int, $after: String) {
-        posts(first: $first, after: $after, input: {
-          organizationId: $organizationId,
-          filter: { status: [sent], channelIds: $channelIds },
-          sort: [{ field: dueAt, direction: desc }]
-        }) {
-          pageInfo { hasNextPage endCursor }
-          edges { node { id sentAt metricsUpdatedAt metrics { type value } } }
-        }
-      }`,
-      { organizationId, channelIds: [channelId], first: PAGE_SIZE, after },
-    );
-
-    for (const { node } of data.posts.edges ?? []) {
-      if (!node.sentAt) continue;
-      posts.push(toSample(node));
-      if (node.metricsUpdatedAt && (!metricsUpdatedAt || node.metricsUpdatedAt > metricsUpdatedAt)) {
-        metricsUpdatedAt = node.metricsUpdatedAt;
-      }
-    }
-
-    if (!data.posts.pageInfo.hasNextPage) break;
-    after = data.posts.pageInfo.endCursor;
-  }
-
-  return { posts, metricsUpdatedAt };
-}
-
-/**
- * Buffer returns metrics as a list of { type, value }, and each network
- * names things differently (likes vs reactions, reposts vs shares,
- * views vs impressions). This normalizes them.
- */
-function toSample(node: RawPost): PostSample {
-  const m = new Map((node.metrics ?? []).map((x) => [x.type, x.value]));
-  const first = (...types: string[]) => {
-    for (const t of types) if (m.has(t)) return m.get(t)!;
-    return undefined;
-  };
-  return {
-    id: node.id,
-    sentAt: node.sentAt!,
-    reactions: first("reactions", "likes") ?? 0,
-    comments: first("comments") ?? 0,
-    shares: first("shares", "reposts"),
-    impressions: first("impressions", "views", "reach"),
-  };
 }
 
 export type ScheduledPost = { id: string; status: string; dueAt: string | null; text: string; channelId: string };

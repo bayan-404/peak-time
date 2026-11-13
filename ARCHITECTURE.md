@@ -1,16 +1,14 @@
-# PeakTime Architecture
+# Streakline Architecture
 
-> Shows creators **when** their audience engages most, using their own Buffer post analytics.
+> Plan a "Day N of X" posting series in one place and schedule every day to Buffer.
 
-## 1. MVP scope
+## 1. Scope
 
-1. Pick a **channel** (Instagram, LinkedIn, X…).
-2. Pull **sent posts + per-post metrics** from Buffer.
-3. Show a **7×24 heatmap** (weekday × hour) of average engagement.
-4. Highlight the **top 3 time slots** with one plain-English tip.
-5. **Demo mode** with sample data, so anyone can try it without an account.
-
-Nice-to-have: "Schedule my next post at the best slot" (`createPost` mutation).
+1. **Connect** a Buffer account (OAuth).
+2. **Create a series**: number of days, start date, time, weekdays, channels, topic.
+3. **Write** one note per day. The "Day N/X" wording is added automatically.
+4. **Schedule** every remaining day to Buffer in one click.
+5. **Move** a day to a later date. Later days follow, and posts already in Buffer are updated.
 
 ## 2. Stack
 
@@ -18,74 +16,97 @@ Nice-to-have: "Schedule my next post at the best slot" (`createPost` mutation).
 |---|---|---|
 | Framework | Next.js (App Router) + TypeScript | Frontend + server API routes in one repo, one deploy |
 | Styling | Tailwind CSS | Fast to build a clean UI |
-| Heatmap | Plain CSS grid | It's just colored cells; no chart library needed |
-| Hosting | Vercel | Free, deploys from GitHub, handles env vars |
-| Data | No database | Fetch live from Buffer, cache in memory |
+| Auth | Buffer OAuth 2.0 (Authorization Code + PKCE) | Each user schedules to their own account |
+| Session | Encrypted, HTTP-only cookie | No database needed to keep someone connected |
+| Series data | Browser `localStorage` | No database, and the user's plan never leaves their device |
+| Hosting | Vercel | Deploys from GitHub, handles env vars |
 
 ## 3. Data flow
 
 ```
-Browser (app/page.tsx)
-   │  GET /api/channels
-   │  GET /api/best-times?channelId=...&tz=...
+Browser (app/series/…)
+   │  series saved in localStorage (lib/series-store.ts)
+   │  dates and post text computed in the browser (lib/series.ts)
+   │
+   │  GET  /api/auth/me            connected?
+   │  GET  /api/channels           channel picker
+   │  POST /api/series/schedule    create posts, 10 per request
+   │  POST /api/series/reconcile   which of these already exist in Buffer?
+   │  POST /api/series/move        change the time of scheduled posts
    ▼
-Next.js API routes (server only, holds BUFFER_API_KEY)
+Next.js API routes (server only: client secret + decrypted tokens)
+   │  lib/oauth.ts    → token exchange and refresh
+   │  lib/session.ts  → encrypted cookie
    │  lib/buffer.ts   → GraphQL calls to Buffer
-   │  lib/analyze.ts  → pure function: posts → heatmap + top slots
    ▼
 Buffer API: POST https://api.buffer.com (GraphQL)
 ```
 
-**Rule:** the API key never reaches the browser. Anything in frontend code is public.
+**Rule:** the client secret and the user's tokens never reach browser code. The browser only carries the token inside a cookie it cannot read.
+
+**Why dates are computed in the browser:** a series posts at "9:00 in my timezone". Building the dates where that timezone lives keeps them right across daylight-saving changes. The server only receives finished ISO timestamps.
 
 ## 4. Files
 
 ```
-app/page.tsx                  UI: channel picker, tip, top slots, heatmap
-app/api/channels/route.ts     GET → Channel[]
-app/api/best-times/route.ts   GET → BestTimesResult
-components/Heatmap.tsx        7 × 24 grid
-lib/buffer.ts                 Buffer GraphQL client (server-only)
-lib/analyze.ts                Core logic, no I/O
-lib/demo-data.ts              Seeded fake posts for demo mode
-lib/types.ts                  Shared types
+app/page.tsx                        Redirects to /series
+app/series/page.tsx                 Series list + "New series" form (or the welcome screen)
+app/series/[id]/page.tsx            One series: notes, schedule, move a day
+app/privacy/page.tsx                Privacy policy
+app/api/auth/{login,callback,logout,me}/route.ts   OAuth flow + connection check
+app/api/channels/route.ts           GET  → Channel[]
+app/api/series/schedule/route.ts    POST → create scheduled posts
+app/api/series/reconcile/route.ts   POST → find posts with an unknown outcome
+app/api/series/move/route.ts        POST → move scheduled posts
+components/Welcome.tsx              First screen before Buffer is connected
+components/Logo.tsx, ServiceIcon.tsx
+lib/series.ts                       Series model + pure logic, no I/O
+lib/series-store.ts                 localStorage read/write
+lib/buffer.ts                       Buffer GraphQL client (server-only)
+lib/oauth.ts                        OAuth + token refresh (server-only)
+lib/session.ts                      Encrypted cookie (server-only)
+lib/api-error.ts                    Safe error responses
+lib/types.ts                        Shared `Channel` type
 ```
 
-`lib/buffer.ts` maps Buffer's raw response into our own `PostSample` type, so if Buffer's field names change, only one file changes.
+`lib/buffer.ts` maps Buffer's raw responses into our own shapes, so if Buffer's field names change, only one file changes.
 
-## 5. Buffer API usage
+## 5. Series logic (`lib/series.ts`)
 
-| Step | Operation | Purpose |
-|---|---|---|
-| 1 | `account → organizations { id }` | Get `organizationId` |
-| 2 | `channels(input: { organizationId })` | Fill the channel picker |
-| 3 | `posts(first, after, input: { organizationId, filter: { status: [sent], channelIds } })` → `sentAt`, `metrics { type value }`, `metricsUpdatedAt` | Raw data (100/page, max 10 pages) |
-| 4 (optional) | `createPost` mutation | Schedule at peak time |
+- **Day numbers map to posting slots, not dates.** Slots only fall on the chosen weekdays. That is why a "Mon/Wed/Fri" series stays on those days after a day is moved.
+- **Moving a day adds a skip.** A skip pushes that day and every later day back one slot. No day is dropped and the order never changes.
+- **`schedulePlan` is idempotent.** It lists only the days not yet in Buffer, so "Schedule all" can be clicked again to continue or retry.
+- **`movePlan` is idempotent too.** It lists posts whose time in Buffer no longer matches the plan. A post drops off once it is moved.
+- **Notes lock once a day is scheduled**, because edits made here would not reach the post in Buffer.
 
-GraphQL returns HTTP 200 even on errors, so `bufferQuery()` checks the `errors` array.
+## 6. Buffer API usage
 
-Metric names differ per network, so `toSample()` normalizes them: `reactions|likes`, `comments`, `shares|reposts`, `impressions|views|reach`.
+| Operation | Purpose |
+|---|---|
+| `account → organizations { id }` | Get `organizationId` |
+| `channels(input: { organizationId })` | Fill the channel picker |
+| `createPost` (mode `customScheduled`, `dueAt`) | Schedule one day on one channel |
+| `editPost` | Move a scheduled post to a new time |
+| `posts(… filter: { status: [scheduled], channelIds, dueAt })` | Check what already exists |
 
-**Constraints:**
-- Metrics refresh **daily**, so data can lag ~24h. Show "last updated".
-- Free plans: analytics limited to the **last 31 days**, so expect small samples.
-- Rate limit is shared across all calls. Cache results ~10 min.
-- OAuth apps get their own limit: **100 requests / 15 min + 10 per authorized user**, shared by all users. A long series can't be created in one run.
-- Scheduling reads the `RateLimit` header and stops when a window is nearly empty; on a `429` it reports `Retry-After`. The series is resumable, so the user just clicks again later.
-- `createPost` has no idempotency key. A batch is marked `pending` before it is sent; if no answer comes back, the next run asks Buffer what exists (`/api/series/reconcile`) before creating anything.
-- Metrics vary by network. Reactions + comments are always present; impressions only on some.
+Scopes: `account:read`, `posts:write`, `posts:read`, `offline_access`.
 
-## 6. Analysis rules (`lib/analyze.ts`)
+GraphQL returns HTTP 200 even on errors, so `bufferRequest()` checks the `errors` array. Mutation failures come back as a union member (`MutationError`), not in `errors`.
 
-- **Use the user's timezone, not UTC**, or "best at 3am" is really 9pm local.
-- **Use engagement rate** (engagements ÷ impressions) when every post has impressions, so wider-reaching posts don't win unfairly. Otherwise use raw engagements.
-- **Need ≥ 2 posts in a slot** to rank it, so one viral post can't crown a slot.
-- **Fewer than 15 posts → 3-hour blocks**, so the heatmap isn't mostly empty.
+**Constraints and how we handle them:**
+
+- **Rate limit:** 100 requests / 15 min + 10 per authorized user, shared by all users of the app. Scheduling reads the `RateLimit` header and stops when a window is nearly empty; on a `429` it reports `Retry-After`. The series is resumable, so the user clicks again later.
+- **No idempotency key on `createPost`.** A batch is marked `pending` before it is sent. If no answer comes back, the next run asks Buffer what exists (`/api/series/reconcile`) before creating anything. This is what prevents double posts.
+- **Plan limits** (for example 10 scheduled posts per channel on the free plan) are reported as "plan is full", not as failed days. The rest are scheduled in a later round.
+- **Refresh tokens are single-use.** Reusing one revokes the whole grant, so all refreshes go through `getAccessToken()`, which de-duplicates concurrent refreshes. The client also sends batches one at a time.
+- **`editPost` needs the text again**, or Buffer rejects it with "Post must have either text or media".
 
 ## 7. Status
 
-- [x] Scaffold, analysis logic, demo mode, heatmap UI
-- [x] Live Buffer data (`account`, `channels`, `posts` with `metrics`)
-- [x] Demo / My Buffer toggle + error/empty states
-- [x] 10-min in-memory cache (`lib/cache.ts`)
-- [ ] Deploy to Vercel + README screenshots
+- [x] OAuth connect / disconnect
+- [x] Create a series with chosen weekdays
+- [x] Schedule all, resumable, safe against double posts
+- [x] Move a day and update Buffer
+- [x] Privacy policy
+- [ ] README screenshots
+- [ ] Sync series across devices (needs a server store)
