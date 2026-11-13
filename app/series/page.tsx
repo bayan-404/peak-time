@@ -120,7 +120,7 @@ export default function SeriesListPage() {
                   {s.total} days from {s.startDate} at {s.time} · {Object.keys(s.posts).length} posts scheduled
                 </div>
               </Link>
-              <button onClick={() => remove(s.id)} className="text-sm opacity-60 hover:opacity-100">
+              <button onClick={() => remove(s.id)} className="text-sm opacity-60 transition-colors hover:text-red-600 hover:opacity-100 dark:hover:text-red-400">
                 Delete
               </button>
             </div>
@@ -129,7 +129,7 @@ export default function SeriesListPage() {
       )}
 
       {connected && (
-        <form onSubmit={create} className="space-y-4">
+        <form onSubmit={create} className="space-y-4 rounded-2xl bg-black/[.04] p-5 sm:p-6 dark:bg-white/[.06]">
           <div className="flex justify-between">
             <h2 className="font-semibold">New series</h2>
             <button type="button" onClick={logout} className="text-sm underline opacity-70">
