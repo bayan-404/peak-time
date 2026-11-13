@@ -70,6 +70,8 @@ export default function SeriesListPage() {
   useEffect(() => {
     setList(loadAll());
     const err = new URLSearchParams(window.location.search).get("error");
+    // Show it once: without this, a refresh or a bookmark repeats an old login error.
+    if (err) window.history.replaceState(null, "", window.location.pathname);
     if (err) setError(err);
     fetch("/api/auth/me")
       .then((r) => r.json())
