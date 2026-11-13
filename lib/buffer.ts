@@ -228,9 +228,41 @@ export async function createScheduledPost(
   );
   // Mutation failures come back as a union member, not in `errors`.
   if (!data.createPost.post) {
-    throw new BufferApiError(data.createPost.message ?? "createPost failed", "MUTATION");
+    const message = data.createPost.message ?? "createPost failed";
+    // A plan limit (e.g. 10 scheduled posts per channel on the free plan) is
+    // not a broken post: every later post would fail the same way.
+    const limit = data.createPost.__typename === "LimitReachedError" || /limit reached/i.test(message);
+    throw new BufferApiError(message, limit ? "LIMIT_REACHED" : "MUTATION");
   }
   return { post: data.createPost.post, lowQuota };
+}
+
+/**
+ * Moves a scheduled post to a new time. Safe to repeat: sending the same
+ * time twice changes nothing. The text must be sent along: Buffer answers
+ * "Post must have either text or media" to an edit that leaves it out.
+ */
+export async function moveScheduledPost(
+  token: string,
+  input: { id: string; text: string; dueAt: string },
+): Promise<{ dueAt: string; lowQuota: number | null }> {
+  const { data, lowQuota } = await bufferRequest<{
+    editPost: { __typename: string; post?: { id: string; dueAt: string | null }; message?: string };
+  }>(
+    `mutation MovePost($input: EditPostInput!) {
+      editPost(input: $input) {
+        __typename
+        ... on PostActionSuccess { post { id dueAt } }
+        ... on MutationError { message }
+      }
+    }`,
+    { input: { ...input, mode: "customScheduled" } },
+    token,
+  );
+  if (!data.editPost.post) {
+    throw new BufferApiError(data.editPost.message ?? "editPost failed", "MUTATION");
+  }
+  return { dueAt: data.editPost.post.dueAt ?? input.dueAt, lowQuota };
 }
 
 /**

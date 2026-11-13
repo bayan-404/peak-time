@@ -4,7 +4,19 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { MAX_DAYS, renderDay, seriesProblems, templateFor, toDateInput, type Series } from "@/lib/series";
+import ServiceIcon from "@/components/ServiceIcon";
+import {
+  MAX_DAYS,
+  dateFormatHint,
+  dueAtFor,
+  formatDate,
+  formatTime,
+  renderDay,
+  seriesProblems,
+  templateFor,
+  toDateInput,
+  type Series,
+} from "@/lib/series";
 import { deleteSeries, loadAll, saveSeries } from "@/lib/series-store";
 import type { Channel } from "@/lib/types";
 
@@ -114,7 +126,8 @@ export default function SeriesListPage() {
               <Link href={`/series/${s.id}`} className="hover:underline">
                 <div className="font-medium">{s.name}</div>
                 <div className="text-xs opacity-60">
-                  {s.total} days from {s.startDate} at {s.time} · {Object.keys(s.posts).length} posts scheduled
+                  {s.total} days · starts {formatDate(dueAtFor(s, 1))} at {formatTime(dueAtFor(s, 1))} ·{" "}
+                  {Object.keys(s.posts).length} posts scheduled
                 </div>
               </Link>
               <button onClick={() => remove(s.id)} className="text-sm opacity-60 hover:opacity-100">
@@ -152,7 +165,9 @@ export default function SeriesListPage() {
               />
             </label>
             <label className="block space-y-1">
-              <span className="text-sm">Start</span>
+              <span className="text-sm">
+                Start <span className="opacity-60">· {dateFormatHint()}</span>
+              </span>
               <input
                 type="date"
                 value={startDate}
@@ -168,12 +183,27 @@ export default function SeriesListPage() {
             </label>
           </div>
 
+          {startDate && time && (
+            // Spelled out, so the day and month can't be mixed up.
+            <p className="rounded-md bg-[var(--foreground)]/5 px-3 py-2 text-sm">
+              Day 1 posts on <b>{formatDate(dueAtFor({ startDate, time }, 1))}</b> at{" "}
+              <b>{formatTime(dueAtFor({ startDate, time }, 1))}</b>
+              {total > 1 && (
+                <>
+                  . Day {total} posts on <b>{formatDate(dueAtFor({ startDate, time }, total))}</b>
+                </>
+              )}
+              .
+            </p>
+          )}
+
           <fieldset className="space-y-1">
             <legend className="text-sm">Channels</legend>
             {channels.map((c) => (
               <label key={c.id} className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={channelIds.includes(c.id)} onChange={() => toggleChannel(c.id)} />
-                {c.name} <span className="opacity-60">({c.service})</span>
+                <ServiceIcon service={c.service} className="h-4 w-4" />
+                {c.name}
               </label>
             ))}
           </fieldset>

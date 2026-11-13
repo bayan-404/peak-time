@@ -19,6 +19,9 @@ export type Series = {
   // Keys sent to Buffer whose outcome we never heard (dropped connection,
   // closed tab). Checked against Buffer before anything is created again.
   pending?: string[];
+  // Day numbers that were pushed back by one day ("I didn't show up").
+  // Each entry delays that day and every day after it; a day can appear twice.
+  skips?: number[];
   createdAt: string;
 };
 
@@ -40,10 +43,55 @@ export function renderDay(template: string, n: number, total: number, note: stri
  * When day `n` posts. Built with local Date parts, so it's correct across
  * DST changes as long as it runs in the series' timezone (the browser).
  */
-export function dueAtFor(s: Pick<Series, "startDate" | "time">, n: number): Date {
+export function dueAtFor(s: Pick<Series, "startDate" | "time" | "skips">, n: number): Date {
   const [y, m, d] = s.startDate.split("-").map(Number);
   const [hh, mm] = s.time.split(":").map(Number);
-  return new Date(y, m - 1, d + n - 1, hh, mm);
+  // Every skip at or before day n moved it one day later.
+  const delay = (s.skips ?? []).filter((k) => k <= n).length;
+  return new Date(y, m - 1, d + n - 1 + delay, hh, mm);
+}
+
+/** Pushes day `n` and every later day back by `days` days. No day is dropped. */
+export function skipDay(s: Series, n: number, days = 1): Series {
+  return { ...s, skips: [...(s.skips ?? []), ...Array<number>(Math.max(0, days)).fill(n)] };
+}
+
+/**
+ * Whole days from `from` to a "YYYY-MM-DD" date. Counted on calendar dates
+ * (not milliseconds) so a daylight-saving change never makes it off by one.
+ */
+export function daysUntil(from: Date, dateInput: string) {
+  const [y, m, d] = dateInput.split("-").map(Number);
+  if (!y || !m || !d) return NaN;
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(from.getFullYear(), from.getMonth(), from.getDate())) / 86_400_000);
+}
+
+export type MoveItem = { key: string; postId: string; text: string; dueAt: string };
+
+const sameMinute = (a: string, b: Date) => Math.floor(Date.parse(a) / 60000) === Math.floor(b.getTime() / 60000);
+
+/**
+ * Posts already in Buffer whose time no longer matches the plan (after a skip).
+ * Idempotent like schedulePlan: a post drops off this list once it is moved,
+ * so an interrupted run can simply be continued. Earliest day first, because
+ * that is the post closest to going out.
+ */
+export function movePlan(s: Series, now = Date.now()): MoveItem[] {
+  const items: MoveItem[] = [];
+  for (let n = 1; n <= s.total; n++) {
+    const due = dueAtFor(s, n);
+    for (const channelId of s.channelIds) {
+      const key = dayKey(n, channelId);
+      const post = s.posts[key];
+      // A post whose old time has passed was already published: nothing to move.
+      if (!post || Date.parse(post.dueAt) <= now || sameMinute(post.dueAt, due)) continue;
+      // Buffer rejects an edit without text, so the post's text is sent again.
+      // Notes are locked once a day is scheduled, so this equals what Buffer has.
+      const text = renderDay(s.template, n, s.total, s.notes[n]);
+      items.push({ key, postId: post.postId, text, dueAt: due.toISOString() });
+    }
+  }
+  return items;
 }
 
 /**
@@ -92,6 +140,25 @@ export function schedulePlan(s: Series, now = Date.now()) {
     }
   }
   return { items, past, done };
+}
+
+/** "Sat, Nov 14, 2026", in the reader's own language and order. */
+export const formatDate = (d: Date) =>
+  d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+
+/** "9:00 AM" or "09:00", whichever the reader's locale uses. */
+export const formatTime = (d: Date) => d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
+/**
+ * The order a date is typed in for this reader, e.g. "MM/DD/YYYY" or
+ * "DD.MM.YYYY". Shown next to date fields so 03/04 is never ambiguous.
+ */
+export function dateFormatHint() {
+  const names: Record<string, string> = { day: "DD", month: "MM", year: "YYYY" };
+  return new Intl.DateTimeFormat(undefined, { year: "numeric", month: "2-digit", day: "2-digit" })
+    .formatToParts(new Date(2026, 10, 25))
+    .map((part) => names[part.type] ?? part.value)
+    .join("");
 }
 
 export function toDateInput(d: Date) {
