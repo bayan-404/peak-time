@@ -108,7 +108,8 @@ export default function SeriesListPage() {
 
       {connected === false && <Welcome />}
 
-      {list.length > 0 && (
+      {/* Hidden while disconnected: the series stay saved and return on reconnect. */}
+      {connected && list.length > 0 && (
         <section className="space-y-2">
           <h2 className="font-semibold">Your series</h2>
           {list.map((s) => (
