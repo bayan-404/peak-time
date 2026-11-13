@@ -4,8 +4,7 @@
 // keyboard has no emoji key. The picked emoji goes in at the cursor.
 import { useEffect, useRef, useState } from "react";
 
-// A short list that fits challenge posts. No library: the full set is one
-// shortcut away (see the hint in the picker), and this keeps the page light.
+// A short list that fits challenge posts. No library, to keep the page light.
 const EMOJIS = [
   ..."✅ 🔥 🚀 💪 🎯 📈 ⭐ 🏆".split(" "),
   ..."🎉 🙌 👏 ✨ 🥳 💯 🏁 🎁".split(" "),
@@ -115,10 +114,6 @@ export default function NoteField({ value, onChange, label, placeholder, disable
               </button>
             ))}
           </div>
-          <p className="mt-2 border-t px-1 pt-2 text-xs opacity-60">
-            Need another one? Press <kbd className="font-sans font-medium">Win + .</kbd> on Windows or{" "}
-            <kbd className="font-sans font-medium">Ctrl + Cmd + Space</kbd> on Mac.
-          </p>
         </div>
       )}
     </div>
