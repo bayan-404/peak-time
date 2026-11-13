@@ -4,11 +4,15 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import ServiceIcon from "@/components/ServiceIcon";
 import {
   CHECK_IN_TEXT,
+  dateFormatHint,
   dayKey,
   daysUntil,
   dueAtFor,
+  formatDate,
+  formatTime,
   formatWait,
   movePlan,
   renderDay,
@@ -58,6 +62,7 @@ export default function SeriesDetailPage() {
   // Posts in Buffer that still sit on their old date after a skip.
   const moves = useMemo(() => (series ? movePlan(series) : []), [series]);
   const channelName = (cid: string) => channels.find((c) => c.id === cid)?.name ?? "channel";
+  const channelService = (cid: string) => channels.find((c) => c.id === cid)?.service;
 
   function update(next: Series) {
     setSeries(next);
@@ -170,7 +175,6 @@ export default function SeriesDetailPage() {
     }
   }
 
-  const dayLabel = (d: Date) => d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
   const addDays = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 
   /** "I won't show up that day": move this day to a later date. Later days follow by the same amount. */
@@ -182,7 +186,7 @@ export default function SeriesDetailPage() {
     const inBuffer = Object.keys(series.posts).filter((k) => Number(k.split(":")[0]) >= day).length;
     const later = series.total > day ? ` Every day after it moves ${days} day${days === 1 ? "" : "s"} later too, so no day is dropped.` : "";
     const ok = confirm(
-      `Move Day ${day} from ${dayLabel(from)} to ${dayLabel(addDays(from, days))}?${later}` +
+      `Move Day ${day} from ${formatDate(from)} to ${formatDate(addDays(from, days))}?${later}` +
         (inBuffer > 0 ? `\n\n${inBuffer} post${inBuffer === 1 ? "" : "s"} already in Buffer will be updated.` : ""),
     );
     if (!ok) return;
@@ -272,8 +276,15 @@ export default function SeriesDetailPage() {
         <Link href="/series" className="text-sm opacity-60 hover:opacity-100">← All series</Link>
         <h1 className="text-3xl font-bold">{series.name}</h1>
         <p className="text-sm opacity-70">
-          {series.total} days from {series.startDate} at {series.time} ({series.timezone}) ·{" "}
-          {series.channelIds.map(channelName).join(", ")}
+          {series.total} days · {formatDate(dueAtFor(series, 1))}
+          {series.total > 1 && <> → {formatDate(dueAtFor(series, series.total))}</>} · daily at{" "}
+          {formatTime(dueAtFor(series, 1))} ({series.timezone})
+          {series.channelIds.map((c) => (
+            <span key={c} className="whitespace-nowrap">
+              {" "}
+              · <ServiceIcon service={channelService(c)} className="h-3.5 w-3.5 align-[-2px]" /> {channelName(c)}
+            </span>
+          ))}
           {skipCount > 0 && <> · pushed back {skipCount} day{skipCount === 1 ? "" : "s"}</>}
         </p>
       </header>
@@ -342,24 +353,50 @@ export default function SeriesDetailPage() {
           const due = dueAtFor(series, n);
           const keys = series.channelIds.map((c) => dayKey(n, c));
           const locked = keys.some((k) => series.posts[k]); // already in Buffer: edits wouldn't sync
+          // Once the post time has passed the day is closed: nothing on the card can change it.
+          const past = due.getTime() <= now;
+          const done = past && locked; // it was in Buffer when its time came
+          const cardColor = done
+            ? "border-green-600/40 bg-green-600/10"
+            : past
+              ? "border-dashed bg-[var(--foreground)]/5"
+              : "";
+          const newDays = moving?.day === n ? daysUntil(due, moving.date) : NaN;
           return (
-            <li key={n} className="rounded-xl border p-3 space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                <span className="font-medium">
-                  Day {n} <span className="opacity-60">· {due.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}</span>
-                </span>
-                <span className="flex flex-wrap gap-1">
+            <li key={n} className={`rounded-xl border p-3 space-y-2 ${cardColor}`}>
+              {/* Three columns so the status badge sits in the top middle. */}
+              <div className="grid grid-cols-[1fr_auto_1fr] items-start gap-2 text-sm">
+                <div>
+                  <div className="font-medium">Day {n}</div>
+                  <div className="text-xs opacity-70">
+                    {formatDate(due)} · {formatTime(due)}
+                  </div>
+                </div>
+                <div className="pt-0.5">
+                  {done && (
+                    <span className="rounded-full bg-green-600 px-3 py-1 text-xs font-semibold text-white">✓ Done</span>
+                  )}
+                  {past && !done && (
+                    <span className="rounded-full border px-3 py-1 text-xs font-semibold opacity-70">Missed</span>
+                  )}
+                </div>
+                <span className="flex flex-wrap justify-end gap-1">
                   {series.channelIds.map((c) => {
                     const k = dayKey(n, c);
                     const [label, cls] = series.posts[k]
-                      ? ["scheduled", "bg-green-600/15 text-green-700"]
+                      ? [past ? "posted" : "scheduled", "bg-green-600/15 text-green-700"]
                       : failures[k]
                         ? ["failed", "bg-red-600/15 text-red-700"]
-                        : due.getTime() <= Date.now()
-                          ? ["past", "opacity-50"]
+                        : past
+                          ? ["not posted", "opacity-60"]
                           : ["not scheduled", "opacity-60"];
                     return (
-                      <span key={c} title={failures[k]} className={`rounded-full border px-2 py-0.5 text-xs ${cls}`}>
+                      <span
+                        key={c}
+                        title={failures[k]}
+                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs ${cls}`}
+                      >
+                        <ServiceIcon service={channelService(c)} className="h-3 w-3" />
                         {channelName(c)}: {label}
                       </span>
                     );
@@ -369,35 +406,57 @@ export default function SeriesDetailPage() {
               <textarea
                 value={series.notes[n] ?? ""}
                 onChange={(e) => setNote(n, e.target.value)}
-                disabled={locked}
+                disabled={locked || past}
                 rows={2}
                 placeholder={CHECK_IN_TEXT}
                 className="w-full rounded-md border px-3 py-2 bg-transparent text-sm disabled:opacity-60"
               />
               <p className="text-xs opacity-60 whitespace-pre-wrap">{renderDay(series.template, n, series.total, series.notes[n])}</p>
               {keys.map((k) => failures[k] && <p key={k} className="text-xs text-red-600">{failures[k]}</p>)}
-              {due.getTime() > now &&
+              {!past &&
                 (moving?.day === n ? (
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <span>Move Day {n} to</span>
-                    <input
-                      type="date"
-                      value={moving.date}
-                      min={toDateInput(addDays(due, 1))}
-                      onChange={(e) => setMoving({ day: n, date: e.target.value })}
-                      className="rounded-md border bg-transparent px-2 py-1"
-                    />
-                    <button
-                      onClick={() => moveDay(n, moving.date)}
-                      disabled={!(daysUntil(due, moving.date) >= 1)}
-                      className="rounded-md bg-[var(--accent)] px-2 py-1 text-white disabled:opacity-50"
-                    >
-                      Move
-                    </button>
-                    <button onClick={() => setMoving(null)} className="underline opacity-70">
-                      Cancel
-                    </button>
-                    {series.total > n && <span className="opacity-60">Later days follow by the same amount.</span>}
+                  <div className="space-y-3 rounded-lg border border-dashed p-3 text-sm">
+                    <div className="font-medium">Move Day {n} to another date</div>
+                    <div className="flex flex-wrap items-end gap-2">
+                      <label className="space-y-1">
+                        <span className="block text-xs opacity-70">New date · {dateFormatHint()}</span>
+                        <input
+                          type="date"
+                          value={moving.date}
+                          min={toDateInput(addDays(due, 1))}
+                          onChange={(e) => setMoving({ day: n, date: e.target.value })}
+                          className="rounded-md border bg-transparent px-3 py-1.5"
+                        />
+                      </label>
+                      <button
+                        onClick={() => moveDay(n, moving.date)}
+                        disabled={!(newDays >= 1)}
+                        className="rounded-md bg-[var(--accent)] px-4 py-1.5 text-white disabled:opacity-50"
+                      >
+                        Move
+                      </button>
+                      <button onClick={() => setMoving(null)} className="rounded-md border px-4 py-1.5">
+                        Cancel
+                      </button>
+                    </div>
+                    {/* The chosen date spelled out, so day and month can't be mixed up. */}
+                    <p className="text-xs opacity-70">
+                      {newDays >= 1 ? (
+                        <>
+                          Day {n} will post on <b>{formatDate(addDays(due, newDays))}</b> at {formatTime(due)},{" "}
+                          {newDays} day{newDays === 1 ? "" : "s"} later than planned.
+                        </>
+                      ) : (
+                        <>Pick a date after {formatDate(due)}.</>
+                      )}
+                      {series.total > n && (
+                        <>
+                          {" "}
+                          {series.total === n + 1 ? `Day ${n + 1} follows` : `Days ${n + 1} to ${series.total} follow`} by the
+                          same amount.
+                        </>
+                      )}
+                    </p>
                   </div>
                 ) : (
                   <button

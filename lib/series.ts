@@ -142,6 +142,25 @@ export function schedulePlan(s: Series, now = Date.now()) {
   return { items, past, done };
 }
 
+/** "Sat, Nov 14, 2026", in the reader's own language and order. */
+export const formatDate = (d: Date) =>
+  d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+
+/** "9:00 AM" or "09:00", whichever the reader's locale uses. */
+export const formatTime = (d: Date) => d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
+/**
+ * The order a date is typed in for this reader, e.g. "MM/DD/YYYY" or
+ * "DD.MM.YYYY". Shown next to date fields so 03/04 is never ambiguous.
+ */
+export function dateFormatHint() {
+  const names: Record<string, string> = { day: "DD", month: "MM", year: "YYYY" };
+  return new Intl.DateTimeFormat(undefined, { year: "numeric", month: "2-digit", day: "2-digit" })
+    .formatToParts(new Date(2026, 10, 25))
+    .map((part) => names[part.type] ?? part.value)
+    .join("");
+}
+
 export function toDateInput(d: Date) {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
