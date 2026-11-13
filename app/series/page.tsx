@@ -7,14 +7,18 @@ import { useEffect, useState } from "react";
 import ServiceIcon from "@/components/ServiceIcon";
 import {
   MAX_DAYS,
+  WEEK,
   dateFormatHint,
   dueAtFor,
   formatDate,
   formatTime,
   renderDay,
+  scheduleLabel,
   seriesProblems,
+  spreadWeekdays,
   templateFor,
   toDateInput,
+  weekdayName,
   type Series,
 } from "@/lib/series";
 import { deleteSeries, loadAll, saveSeries } from "@/lib/series-store";
@@ -23,6 +27,16 @@ import { Logo } from "@/components/Logo";
 import Welcome from "@/components/Welcome";
 
 const input = "w-full rounded-md border px-3 py-2 bg-transparent";
+const chip = (on: boolean) =>
+  `rounded-full border px-3 py-1 text-sm ${on ? "border-transparent bg-[var(--accent)] text-white" : "opacity-80 hover:opacity-100"}`;
+
+// Shortcuts for "how often". Each one only fills in the weekday buttons below it.
+const PACES = [
+  { label: "Every day", count: 7 },
+  { label: "3 times a week", count: 3 },
+  { label: "Twice a week", count: 2 },
+  { label: "Once a week", count: 1 },
+];
 
 function tomorrow() {
   const d = new Date();
@@ -41,6 +55,7 @@ export default function SeriesListPage() {
   const [total, setTotal] = useState(30);
   const [startDate, setStartDate] = useState(tomorrow);
   const [time, setTime] = useState("09:00");
+  const [weekdays, setWeekdays] = useState<number[]>(WEEK);
   const [channelIds, setChannelIds] = useState<string[]>([]);
   const [topic, setTopic] = useState("");
 
@@ -68,8 +83,22 @@ export default function SeriesListPage() {
     setChannelIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
   }
 
+  function toggleWeekday(day: number) {
+    setWeekdays((days) => (days.includes(day) ? days.filter((d) => d !== day) : [...days, day]));
+  }
+
+  /** "3 times a week" → three days spread out from the start date's weekday, so Day 1 stays on the start date. */
+  function setPace(count: number) {
+    const [y, m, d] = startDate.split("-").map(Number);
+    const first = y && m && d ? new Date(y, m - 1, d).getDay() : 1;
+    setWeekdays(spreadWeekdays(count, first));
+  }
+
   // Recomputed on every render, so the messages update as the user types.
-  const problems = seriesProblems({ startDate, time, channelIds });
+  const problems = seriesProblems({ startDate, time, channelIds, weekdays });
+  const plan = { startDate, time, weekdays };
+  // Day 1 is the first posting day on or after the start date, so it can be later.
+  const startsLater = !!startDate && !!time && weekdays.length > 0 && toDateInput(dueAtFor(plan, 1)) !== startDate;
   // We build the post wording from the topic, so there is no template to get wrong.
   const template = templateFor(topic);
 
@@ -82,6 +111,8 @@ export default function SeriesListPage() {
       total,
       startDate,
       time,
+      // Left out for "every day", so those series look exactly like older ones.
+      weekdays: weekdays.length === 7 ? undefined : weekdays,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       channelIds,
       template,
@@ -129,7 +160,8 @@ export default function SeriesListPage() {
               <Link href={`/series/${s.id}`} className="hover:underline">
                 <div className="font-medium">{s.name}</div>
                 <div className="text-xs opacity-60">
-                  {s.total} days · starts {formatDate(dueAtFor(s, 1))} at {formatTime(dueAtFor(s, 1))} ·{" "}
+                  {s.total} days · {scheduleLabel(s.weekdays)} · starts {formatDate(dueAtFor(s, 1))} at{" "}
+                  {formatTime(dueAtFor(s, 1))} ·{" "}
                   {Object.keys(s.posts).length} posts scheduled
                 </div>
               </Link>
@@ -186,14 +218,49 @@ export default function SeriesListPage() {
             </label>
           </div>
 
-          {startDate && time && (
+          <fieldset className="space-y-2">
+            <legend className="text-sm">How often?</legend>
+            <div className="flex flex-wrap gap-2">
+              {PACES.map((p) => (
+                <button
+                  key={p.count}
+                  type="button"
+                  aria-pressed={weekdays.length === p.count}
+                  onClick={() => setPace(p.count)}
+                  className={chip(weekdays.length === p.count)}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {WEEK.map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  aria-pressed={weekdays.includes(d)}
+                  aria-label={weekdayName(d, "long")}
+                  onClick={() => toggleWeekday(d)}
+                  className={chip(weekdays.includes(d))}
+                >
+                  {weekdayName(d)}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs opacity-60">
+              {weekdays.length > 0 ? <>Posts {scheduleLabel(weekdays)}. </> : null}
+              Tap a day to add or remove it.
+            </p>
+          </fieldset>
+
+          {startDate && time && weekdays.length > 0 && (
             // Spelled out, so the day and month can't be mixed up.
             <p className="rounded-md bg-[var(--foreground)]/5 px-3 py-2 text-sm">
-              Day 1 posts on <b>{formatDate(dueAtFor({ startDate, time }, 1))}</b> at{" "}
-              <b>{formatTime(dueAtFor({ startDate, time }, 1))}</b>
+              Day 1 posts on <b>{formatDate(dueAtFor(plan, 1))}</b> at <b>{formatTime(dueAtFor(plan, 1))}</b>
+              {startsLater && <>, your first posting day after the start date</>}
               {total > 1 && (
                 <>
-                  . Day {total} posts on <b>{formatDate(dueAtFor({ startDate, time }, total))}</b>
+                  . Day {total} posts on <b>{formatDate(dueAtFor(plan, total))}</b>
                 </>
               )}
               .

@@ -15,9 +15,12 @@ import {
   formatTime,
   formatWait,
   movePlan,
+  postsEveryDay,
   renderDay,
+  scheduleLabel,
   schedulePlan,
   skipDay,
+  slotsUntil,
   toDateInput,
   type MoveItem,
   type Series,
@@ -184,23 +187,30 @@ export default function SeriesDetailPage() {
 
   const addDays = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 
-  /** "I won't show up that day": move this day to a later date. Later days follow by the same amount. */
+  /**
+   * "I won't show up that day": move this day to a later date. Later days
+   * follow in the same order, each to a later posting day of the series.
+   */
   async function moveDay(day: number, date: string) {
     if (!series || progress) return;
     const from = dueAtFor(series, day);
-    const days = daysUntil(from, date);
-    if (!(days >= 1)) return;
+    const slots = slotsUntil(series, day, date);
+    if (!(slots >= 1)) return;
+    const next = skipDay(series, day, slots);
     const inBuffer = Object.keys(series.posts).filter((k) => Number(k.split(":")[0]) >= day).length;
-    const later = series.total > day ? ` Every day after it moves ${days} day${days === 1 ? "" : "s"} later too, so no day is dropped.` : "";
+    const unit = postsEveryDay(series.weekdays) ? "day" : "posting day";
+    const later =
+      series.total > day
+        ? ` Every day after it moves ${slots} ${unit}${slots === 1 ? "" : "s"} later too, in the same order, so no day is dropped.`
+        : "";
     const ok = confirm(
-      `Move Day ${day} from ${formatDate(from)} to ${formatDate(addDays(from, days))}?${later}` +
+      `Move Day ${day} from ${formatDate(from)} to ${formatDate(dueAtFor(next, day))}?${later}` +
         (inBuffer > 0 ? `\n\n${inBuffer} post${inBuffer === 1 ? "" : "s"} already in Buffer will be updated.` : ""),
     );
     if (!ok) return;
     setMoving(null);
     // Save the new plan first. If updating Buffer is interrupted, the posts
     // still on their old date show up in `moves` and can be finished later.
-    const next = skipDay(series, day, days);
     update(next);
     await moveAll(next);
   }
@@ -276,6 +286,7 @@ export default function SeriesDetailPage() {
   const allDone = !!plan && plan.items.length === 0 && plan.done > 0 && !progress && moves.length === 0;
   const now = Date.now();
   const skipCount = series.skips?.length ?? 0;
+  const everyDay = postsEveryDay(series.weekdays);
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-10 space-y-6">
@@ -284,7 +295,7 @@ export default function SeriesDetailPage() {
         <h1 className="text-3xl font-bold">{series.name}</h1>
         <p className="text-sm opacity-70">
           {series.total} days · {formatDate(dueAtFor(series, 1))}
-          {series.total > 1 && <> → {formatDate(dueAtFor(series, series.total))}</>} · daily at{" "}
+          {series.total > 1 && <> → {formatDate(dueAtFor(series, series.total))}</>} · {scheduleLabel(series.weekdays)} at{" "}
           {formatTime(dueAtFor(series, 1))} ({series.timezone})
           {series.channelIds.map((c) => (
             <span key={c} className="whitespace-nowrap">
@@ -292,7 +303,13 @@ export default function SeriesDetailPage() {
               · <ServiceIcon service={channelService(c)} className="h-3.5 w-3.5 align-[-2px]" /> {channelName(c)}
             </span>
           ))}
-          {skipCount > 0 && <> · pushed back {skipCount} day{skipCount === 1 ? "" : "s"}</>}
+          {skipCount > 0 && (
+            <>
+              {" "}
+              · pushed back {skipCount} {everyDay ? "day" : "posting day"}
+              {skipCount === 1 ? "" : "s"}
+            </>
+          )}
         </p>
       </header>
 
@@ -380,7 +397,11 @@ export default function SeriesDetailPage() {
             : past
               ? "border-dashed bg-[var(--foreground)]/5"
               : "";
-          const newDays = moving?.day === n ? daysUntil(due, moving.date) : NaN;
+          // Where the day would land: the chosen date, or the next posting day after it.
+          const newSlots = moving?.day === n ? slotsUntil(series, n, moving.date) : NaN;
+          const newDue = newSlots >= 1 ? dueAtFor(skipDay(series, n, newSlots), n) : null;
+          const newDays = newDue ? daysUntil(due, toDateInput(newDue)) : NaN;
+          const snapped = !!newDue && toDateInput(newDue) !== moving?.date;
           return (
             <li key={n} className={`rounded-xl border p-3 space-y-2 ${cardColor}`}>
               {/* Three columns so the status badge sits in the top middle. */}
@@ -449,7 +470,7 @@ export default function SeriesDetailPage() {
                       </label>
                       <button
                         onClick={() => moveDay(n, moving.date)}
-                        disabled={!(newDays >= 1)}
+                        disabled={!newDue}
                         className="rounded-md bg-[var(--accent)] px-4 py-1.5 text-white disabled:opacity-50"
                       >
                         Move
@@ -460,10 +481,11 @@ export default function SeriesDetailPage() {
                     </div>
                     {/* The chosen date spelled out, so day and month can't be mixed up. */}
                     <p className="text-xs opacity-70">
-                      {newDays >= 1 ? (
+                      {newDue ? (
                         <>
-                          Day {n} will post on <b>{formatDate(addDays(due, newDays))}</b> at {formatTime(due)},{" "}
-                          {newDays} day{newDays === 1 ? "" : "s"} later than planned.
+                          {snapped && <>That date is not one of your posting days, so it moves to the next one. </>}
+                          Day {n} will post on <b>{formatDate(newDue)}</b> at {formatTime(newDue)}, {newDays} day
+                          {newDays === 1 ? "" : "s"} later than planned.
                         </>
                       ) : (
                         <>Pick a date after {formatDate(due)}.</>
@@ -471,15 +493,16 @@ export default function SeriesDetailPage() {
                       {series.total > n && (
                         <>
                           {" "}
-                          {series.total === n + 1 ? `Day ${n + 1} follows` : `Days ${n + 1} to ${series.total} follow`} by the
-                          same amount.
+                          {series.total === n + 1 ? `Day ${n + 1} follows` : `Days ${n + 1} to ${series.total} follow`}{" "}
+                          {everyDay ? "by the same amount." : "in the same order, each on a later posting day."}
                         </>
                       )}
                     </p>
                   </div>
                 ) : (
                   <button
-                    onClick={() => setMoving({ day: n, date: toDateInput(addDays(due, 1)) })}
+                    // Starts on the next posting day, the most common choice.
+                    onClick={() => setMoving({ day: n, date: toDateInput(dueAtFor(skipDay(series, n), n)) })}
                     // While an earlier run is unconfirmed, dates must not change under it.
                     disabled={!!progress || !!series.pending?.length}
                     className="text-xs underline opacity-70 hover:opacity-100 disabled:opacity-40"
