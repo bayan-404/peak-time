@@ -3,15 +3,18 @@
 // Series list + "New series" form.
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ServiceIcon from "@/components/ServiceIcon";
+import { autoSummary, runSchedule } from "@/lib/schedule-run";
 import {
   MAX_DAYS,
+  autoDue,
   dateFormatHint,
   dueAtFor,
   formatDate,
   formatTime,
   renderDay,
+  schedulePlan,
   seriesProblems,
   templateFor,
   toDateInput,
@@ -42,6 +45,11 @@ export default function SeriesListPage() {
   const [channelIds, setChannelIds] = useState<string[]>([]);
   const [topic, setTopic] = useState("");
 
+  // Auto top-up: which series is being topped up now, and what each run did.
+  const [toppingUp, setToppingUp] = useState<string | null>(null);
+  const [autoNotes, setAutoNotes] = useState<Record<string, string>>({});
+  const autoRan = useRef(false);
+
   useEffect(() => {
     setList(loadAll());
     const err = new URLSearchParams(window.location.search).get("error");
@@ -60,6 +68,25 @@ export default function SeriesListPage() {
         setChannels(d);
         setChannelIds(d[0] ? [d[0].id] : []);
       });
+  }, [connected]);
+
+  // Auto top-up: once per visit, give every series that asked for it the
+  // chance to fill the room Buffer has now. One at a time, because they
+  // share the Buffer login and its rate limit.
+  useEffect(() => {
+    if (!connected || autoRan.current) return;
+    autoRan.current = true;
+    (async () => {
+      for (const s of loadAll()) {
+        if (!autoDue(s)) continue;
+        setToppingUp(s.id);
+        const { outcome, added, series: after } = await runSchedule({ ...s, autoAt: Date.now() }, { save: saveSeries });
+        const note = autoSummary(outcome, added, schedulePlan(after).items.length);
+        setAutoNotes((notes) => ({ ...notes, [s.id]: note }));
+        setList(loadAll());
+      }
+      setToppingUp(null);
+    })();
   }, [connected]);
 
   function toggleChannel(id: string) {
@@ -123,14 +150,35 @@ export default function SeriesListPage() {
           <h2 className="font-semibold">Your series</h2>
           {list.map((s) => (
             <div key={s.id} className="flex items-center justify-between rounded-xl border p-3">
-              <Link href={`/series/${s.id}`} className="hover:underline">
-                <div className="font-medium">{s.name}</div>
+              <Link
+                href={`/series/${s.id}`}
+                // Not clickable while its top-up runs, so the series page can't start a second run.
+                aria-disabled={toppingUp === s.id}
+                className={toppingUp === s.id ? "pointer-events-none" : "hover:underline"}
+              >
+                <div className="font-medium">
+                  {s.name}
+                  {s.auto && (
+                    <span className="ml-2 rounded-full bg-green-600/15 px-2 py-0.5 align-middle text-xs font-medium text-green-700">
+                      Auto top-up
+                    </span>
+                  )}
+                </div>
                 <div className="text-xs opacity-60">
                   {s.total} days · starts {formatDate(dueAtFor(s, 1))} at {formatTime(dueAtFor(s, 1))} ·{" "}
                   {Object.keys(s.posts).length} posts scheduled
                 </div>
+                {toppingUp === s.id ? (
+                  <div className="text-xs">Checking Buffer for room…</div>
+                ) : (
+                  autoNotes[s.id] && <div className="text-xs">{autoNotes[s.id]}</div>
+                )}
               </Link>
-              <button onClick={() => remove(s.id)} className="text-sm opacity-60 hover:opacity-100">
+              <button
+                onClick={() => remove(s.id)}
+                disabled={toppingUp === s.id}
+                className="text-sm opacity-60 hover:opacity-100 disabled:opacity-30"
+              >
                 Delete
               </button>
             </div>

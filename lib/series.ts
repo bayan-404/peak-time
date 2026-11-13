@@ -22,6 +22,10 @@ export type Series = {
   // Day numbers that were pushed back by one day ("I didn't show up").
   // Each entry delays that day and every day after it; a day can appear twice.
   skips?: number[];
+  // Auto top-up: when the app is opened, schedule the next days as soon as
+  // Buffer has room. `autoAt` is when it last tried (epoch ms).
+  auto?: boolean;
+  autoAt?: number;
   createdAt: string;
 };
 
@@ -159,6 +163,24 @@ export function dateFormatHint() {
     .formatToParts(new Date(2026, 10, 25))
     .map((part) => names[part.type] ?? part.value)
     .join("");
+}
+
+const AUTO_RETRY_MS = 15 * 60_000;
+
+/**
+ * Should the auto top-up try now? Yes when it is on, days are waiting, and
+ * either one of our posts went out since the last try (a slot is free) or
+ * enough time passed for other posts in Buffer to have gone out. This keeps
+ * every page view from spending a Buffer request on a queue that is still full.
+ */
+export function autoDue(s: Series, now = Date.now()) {
+  if (!s.auto || schedulePlan(s, now).items.length === 0) return false;
+  const last = s.autoAt ?? 0;
+  if (now - last > AUTO_RETRY_MS) return true;
+  return Object.values(s.posts).some((p) => {
+    const t = Date.parse(p.dueAt);
+    return t > last && t <= now;
+  });
 }
 
 export function toDateInput(d: Date) {

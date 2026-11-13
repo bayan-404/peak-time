@@ -3,10 +3,12 @@
 // One series: write a note per day, then schedule every remaining day to Buffer.
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ServiceIcon from "@/components/ServiceIcon";
+import { autoSummary, runSchedule } from "@/lib/schedule-run";
 import {
   CHECK_IN_TEXT,
+  autoDue,
   dateFormatHint,
   dayKey,
   daysUntil,
@@ -26,7 +28,6 @@ import { getSeries, saveSeries } from "@/lib/series-store";
 import type { Channel } from "@/lib/types";
 
 const BATCH = 10; // must match the API's MAX_BATCH
-type Result = { key: string; postId?: string; dueAt?: string; error?: string; unknown?: boolean };
 type Progress = { done: number; total: number; label: "Scheduling" | "Moving" };
 
 // Where the user reviews, edits or deletes what we scheduled.
@@ -50,6 +51,9 @@ export default function SeriesDetailPage() {
   const [error, setError] = useState("");
   // Buffer's own words when the plan has no room for more scheduled posts.
   const [limit, setLimit] = useState("");
+  // What the automatic top-up did when the page opened.
+  const [autoNote, setAutoNote] = useState("");
+  const autoTried = useRef(false);
   // Which day's "move to another date" picker is open, and the date chosen in it.
   const [moving, setMoving] = useState<{ day: number; date: string } | null>(null);
 
@@ -76,110 +80,55 @@ export default function SeriesDetailPage() {
     update({ ...series, notes: { ...series.notes, [day]: note } });
   }
 
-  async function scheduleAll() {
-    if (!series || !plan || plan.items.length === 0) return;
+  /** `auto`: started by the auto top-up on page open, not by a click. */
+  async function scheduleAll(auto = false) {
+    if (!series || progress) return;
+    const total = schedulePlan(series).items.length;
+    if (total === 0) return;
     setError("");
     setLimit("");
+    setAutoNote("");
     setFailures({});
-    setProgress({ done: 0, total: plan.items.length, label: "Scheduling" });
-    try {
-      await runSchedule(series);
-    } catch {
-      // The request itself failed, so we don't know what Buffer received.
-      setError(UNKNOWN_OUTCOME);
-    } finally {
-      setProgress(null);
+    setProgress({ done: 0, total, label: "Scheduling" });
+    const { outcome, added, series: after } = await runSchedule(auto ? { ...series, autoAt: Date.now() } : series, {
+      save: update,
+      progress: (done, all) => setProgress({ done, total: all, label: "Scheduling" }),
+      failures: setFailures,
+    });
+    setProgress(null);
+    if (auto) setAutoNote(autoSummary(outcome, added, schedulePlan(after).items.length));
+
+    switch (outcome.status) {
+      case "limit":
+        // On an automatic run the note above already says the queue is full.
+        return auto ? undefined : setLimit(outcome.message);
+      case "rate":
+        return auto ? undefined : setError(rateLimitMessage(outcome.retryAfter));
+      case "unknown":
+        return setError(UNKNOWN_OUTCOME);
+      case "disconnected":
+        return setError("Your Buffer connection expired. Reconnect on the series list.");
+      case "busy":
+        return auto ? undefined : setError("This series is being scheduled in another tab. Try again in a minute.");
+      case "stopped":
+        return setError(outcome.message.startsWith("Could not") ? outcome.message : `Stopped: ${outcome.message}`);
     }
   }
 
-  async function runSchedule(start: Series) {
-    // Refresh the token once up front, so batches never race a refresh.
-    const me = await fetch("/api/auth/me").then((r) => r.json());
-    if (!me.connected) return setError("Your Buffer connection expired. Reconnect on the series list.");
+  // Auto top-up: once per page open, if it is switched on and a slot may be free.
+  useEffect(() => {
+    if (!series || autoTried.current) return;
+    autoTried.current = true;
+    if (autoDue(series)) scheduleAll(true);
+    // Runs once when the series has loaded; scheduleAll reads the same series.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [series]);
 
-    let cur = start;
-
-    // An earlier run ended without an answer for these posts. Ask Buffer which
-    // ones exist before creating anything, or they would be posted twice.
-    if (cur.pending?.length) {
-      const unsure = schedulePlan(cur).items.filter((it) => cur.pending!.includes(it.key));
-      const posts = { ...cur.posts };
-      if (unsure.length > 0) {
-        const res = await fetch("/api/series/reconcile", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ items: unsure.map(({ key, channelId, dueAt }) => ({ key, channelId, dueAt })) }),
-        });
-        const data = (await res.json().catch(() => ({}))) as { found?: Result[]; error?: string; retryAfter?: number };
-        if (!data.found) {
-          return setError(
-            data.retryAfter ? rateLimitMessage(data.retryAfter) : (data.error ?? "Could not check Buffer. Try again."),
-          );
-        }
-        for (const r of data.found) posts[r.key] = { postId: r.postId!, dueAt: r.dueAt! };
-      }
-      cur = { ...cur, posts, pending: undefined };
-      update(cur);
-    }
-
-    const items = schedulePlan(cur).items;
-    setProgress({ done: 0, total: items.length, label: "Scheduling" });
-    const failed: Record<string, string> = {};
-    for (let i = 0; i < items.length; i += BATCH) {
-      const batch = items.slice(i, i + BATCH);
-      // Mark the batch as in flight first: if the tab closes or the network
-      // drops before the answer arrives, the next run knows to check Buffer.
-      cur = { ...cur, pending: batch.map((b) => b.key) };
-      update(cur);
-
-      const res = await fetch("/api/series/schedule", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: batch.map(({ key, channelId, text, dueAt }) => ({ key, channelId, text, dueAt })) }),
-      });
-      const data = (await res.json().catch(() => null)) as {
-        results?: Result[];
-        retryAfter?: number | null;
-        limit?: string | null;
-        error?: string;
-      } | null;
-      if (!data?.results) {
-        // A 4xx with a message was refused before anything reached Buffer.
-        if (res.status < 500 && data?.error) {
-          update({ ...cur, pending: undefined });
-          return setError(data.error);
-        }
-        return setError(UNKNOWN_OUTCOME);
-      }
-
-      const posts = { ...cur.posts };
-      const unknown: string[] = [];
-      for (const r of data.results) {
-        if (r.postId) posts[r.key] = { postId: r.postId, dueAt: r.dueAt! };
-        else if (r.unknown) unknown.push(r.key);
-        else failed[r.key] = r.error ?? "Failed";
-      }
-      // Save after every batch so a closed tab never loses what Buffer already has.
-      cur = { ...cur, posts, pending: unknown.length > 0 ? unknown : undefined };
-      update(cur);
-      setFailures({ ...failed });
-      setProgress({ done: Math.min(i + data.results.length, items.length), total: items.length, label: "Scheduling" });
-
-      if (unknown.length > 0) return setError(UNKNOWN_OUTCOME);
-
-      // The Buffer plan is full. The rest stay "not scheduled", not failed.
-      if (data.limit) return setLimit(data.limit);
-
-      // Out of quota with posts still to go: stop and say when to come back.
-      if (data.retryAfter != null && i + data.results.length < items.length) {
-        return setError(rateLimitMessage(data.retryAfter));
-      }
-
-      // A whole batch failing usually means a plan limit or bad token: stop, don't hammer.
-      if (data.results.length > 0 && data.results.every((r) => r.error)) {
-        return setError(`Stopped: ${data.results[0].error}`);
-      }
-    }
+  function setAuto(on: boolean) {
+    if (!series) return;
+    // Turning it on right after Buffer said "full": no need to ask again now.
+    update({ ...series, auto: on, autoAt: on ? Date.now() : undefined });
+    if (!on) setAutoNote("");
   }
 
   const addDays = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
@@ -334,7 +283,7 @@ export default function SeriesDetailPage() {
             </a>
           ) : (
             <button
-              onClick={scheduleAll}
+              onClick={() => scheduleAll()}
               disabled={!!progress || !plan || plan.items.length === 0}
               className="rounded-md bg-[var(--accent)] px-4 py-2 text-white disabled:opacity-50"
             >
@@ -358,10 +307,33 @@ export default function SeriesDetailPage() {
             <p className="font-medium">Your Buffer plan is full for now.</p>
             <p>
               Buffer says: “{limit}” {plan.done > 0 && <>The first {plan.done} are scheduled. </>}
-              Space frees up as posts go out, so come back and click the button to schedule the next ones. To schedule
-              them all at once, upgrade your Buffer plan or delete other scheduled posts in Buffer.
+              Space frees up as posts go out. To schedule them all at once, upgrade your Buffer plan or delete other
+              scheduled posts in Buffer.
             </p>
+            {series.auto ? (
+              <p>Auto top-up is on, so the next days are added for you each time you open Streakline.</p>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <button onClick={() => setAuto(true)} className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-white">
+                  Do it automatically
+                </button>
+                <span className="opacity-80">
+                  Each time you open Streakline, it schedules the next days as soon as Buffer has room.
+                </span>
+              </div>
+            )}
           </div>
+        )}
+        {series.auto && (
+          <p className="text-sm">
+            <span className="rounded-full bg-green-600/15 px-2 py-0.5 text-xs font-medium text-green-700">
+              Auto top-up on
+            </span>{" "}
+            {autoNote || (plan && plan.items.length > 0 ? "The next days are added when you open Streakline and Buffer has room." : "")}{" "}
+            <button onClick={() => setAuto(false)} className="underline opacity-70 hover:opacity-100">
+              Turn off
+            </button>
+          </p>
         )}
         {error && <p className="text-sm text-red-600">{error}</p>}
         {failCount > 0 && !error && <p className="text-sm text-red-600">{failCount} failed. See the days below.</p>}
