@@ -3,13 +3,15 @@
 export const DEFAULT_TEMPLATE = "Day {n}/{total} {text}";
 export const CHECK_IN_TEXT = "Showing up today. ✅";
 export const MAX_DAYS = 365;
+/** Weekdays as Date#getDay() numbers, in the order the form shows them (Monday first). */
+export const WEEK = [1, 2, 3, 4, 5, 6, 0];
 
 export type Series = {
   id: string;
   name: string;
   total: number; // number of days
   startDate: string; // "YYYY-MM-DD", in `timezone`
-  time: string; // "HH:MM" daily post time, in `timezone`
+  time: string; // "HH:MM" post time on each posting day, in `timezone`
   timezone: string; // IANA zone of the creator's browser at creation
   channelIds: string[];
   template: string;
@@ -19,7 +21,10 @@ export type Series = {
   // Keys sent to Buffer whose outcome we never heard (dropped connection,
   // closed tab). Checked against Buffer before anything is created again.
   pending?: string[];
-  // Day numbers that were pushed back by one day ("I didn't show up").
+  // Weekdays the series posts on, as Date#getDay() numbers (0 = Sunday … 6 = Saturday).
+  // Missing = every day, which is also what series made before this field mean.
+  weekdays?: number[];
+  // Day numbers that were pushed back by one posting day ("I didn't show up").
   // Each entry delays that day and every day after it; a day can appear twice.
   skips?: number[];
   // Auto top-up: when the app is opened, schedule the next days as soon as
@@ -43,21 +48,50 @@ export function renderDay(template: string, n: number, total: number, note: stri
     .trim();
 }
 
+type Schedule = Pick<Series, "startDate" | "time" | "skips" | "weekdays">;
+
+/** The posting weekdays, cleaned up. Missing or empty means every day. */
+function postingDays(weekdays?: number[]) {
+  const days = [...new Set(weekdays ?? [])].filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
+  return days.length > 0 ? days : WEEK;
+}
+
+export const postsEveryDay = (weekdays?: number[]) => postingDays(weekdays).length === 7;
+
+/**
+ * Days from the start date to posting day number `slot` (0 = the first one).
+ * Day numbers never map to dates directly: they map to a slot, and slots only
+ * fall on the chosen weekdays. That is what keeps a skip on the same weekdays.
+ */
+function slotOffset(s: Schedule, slot: number) {
+  const [y, m, d] = s.startDate.split("-").map(Number);
+  const startWeekday = new Date(y, m - 1, d).getDay();
+  // How far each posting weekday is from the start date, nearest first.
+  const offsets = postingDays(s.weekdays)
+    .map((w) => (w - startWeekday + 7) % 7)
+    .sort((a, b) => a - b);
+  return Math.floor(slot / offsets.length) * 7 + offsets[slot % offsets.length];
+}
+
+/** The slot day `n` sits in: every skip at or before it moved it one slot later. */
+const slotOf = (s: Schedule, n: number) => n - 1 + (s.skips ?? []).filter((k) => k <= n).length;
+
 /**
  * When day `n` posts. Built with local Date parts, so it's correct across
  * DST changes as long as it runs in the series' timezone (the browser).
  */
-export function dueAtFor(s: Pick<Series, "startDate" | "time" | "skips">, n: number): Date {
+export function dueAtFor(s: Schedule, n: number): Date {
   const [y, m, d] = s.startDate.split("-").map(Number);
   const [hh, mm] = s.time.split(":").map(Number);
-  // Every skip at or before day n moved it one day later.
-  const delay = (s.skips ?? []).filter((k) => k <= n).length;
-  return new Date(y, m - 1, d + n - 1 + delay, hh, mm);
+  return new Date(y, m - 1, d + slotOffset(s, slotOf(s, n)), hh, mm);
 }
 
-/** Pushes day `n` and every later day back by `days` days. No day is dropped. */
-export function skipDay(s: Series, n: number, days = 1): Series {
-  return { ...s, skips: [...(s.skips ?? []), ...Array<number>(Math.max(0, days)).fill(n)] };
+/**
+ * Pushes day `n` and every later day back by `slots` posting days. No day is
+ * dropped and the order stays the same; the days just land on later slots.
+ */
+export function skipDay(s: Series, n: number, slots = 1): Series {
+  return { ...s, skips: [...(s.skips ?? []), ...Array<number>(Math.max(0, slots)).fill(n)] };
 }
 
 /**
@@ -68,6 +102,45 @@ export function daysUntil(from: Date, dateInput: string) {
   const [y, m, d] = dateInput.split("-").map(Number);
   if (!y || !m || !d) return NaN;
   return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(from.getFullYear(), from.getMonth(), from.getDate())) / 86_400_000);
+}
+
+/**
+ * How many posting days day `n` has to move to reach `dateInput`. A date that
+ * is not a posting day counts as the next one after it. NaN unless the date is
+ * later than the day's current one.
+ */
+export function slotsUntil(s: Schedule, n: number, dateInput: string) {
+  const days = daysUntil(dueAtFor(s, n), dateInput);
+  if (!(days >= 1)) return NaN;
+  const from = slotOf(s, n);
+  const base = slotOffset(s, from);
+  // Whole weeks are jumped in one step, so a far-away date costs nothing.
+  let slots = Math.max(1, Math.floor(days / 7) * postingDays(s.weekdays).length);
+  while (slotOffset(s, from + slots) - base < days) slots++;
+  return slots;
+}
+
+/** "Mon" or "Monday", in the reader's own language. */
+export function weekdayName(day: number, length: "short" | "long" = "short") {
+  // 7 Jan 2024 was a Sunday, so adding `day` lands on that weekday.
+  return new Date(2024, 0, 7 + day).toLocaleDateString(undefined, { weekday: length });
+}
+
+/** "every day", "every Saturday", "3 times a week (Mon, Wed, Fri)". */
+export function scheduleLabel(weekdays?: number[]) {
+  const days = postingDays(weekdays);
+  if (days.length === 7) return "every day";
+  if (days.length === 1) return `every ${weekdayName(days[0], "long")}`;
+  const names = WEEK.filter((d) => days.includes(d)).map((d) => weekdayName(d));
+  return `${days.length === 2 ? "twice" : `${days.length} times`} a week (${names.join(", ")})`;
+}
+
+/**
+ * `count` weekdays spread through the week, starting on `first`. Used when the
+ * user says "3 times a week" without naming days: 3 from Monday → Mon, Wed, Fri.
+ */
+export function spreadWeekdays(count: number, first: number) {
+  return Array.from({ length: count }, (_, i) => (first + Math.floor((i * 7) / count)) % 7);
 }
 
 export type MoveItem = { key: string; postId: string; text: string; dueAt: string };
@@ -112,11 +185,12 @@ export function templateFor(topic: string) {
  * Empty list = valid. Kept here (not in the form) so the rules are testable.
  */
 export function seriesProblems(
-  s: Pick<Series, "startDate" | "time" | "channelIds">,
+  s: Pick<Series, "startDate" | "time" | "channelIds" | "weekdays">,
   now = Date.now(),
 ): string[] {
   const problems: string[] = [];
   if (s.channelIds.length === 0) problems.push("Pick at least one channel.");
+  if (s.weekdays?.length === 0) problems.push("Pick at least one day of the week to post on.");
   if (!s.startDate || !s.time) {
     problems.push("Pick a start date and time.");
   } else if (dueAtFor(s, 1).getTime() <= now) {
