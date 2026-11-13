@@ -44,6 +44,34 @@ export function dueAtFor(s: Pick<Series, "startDate" | "time">, n: number): Date
 }
 
 /**
+ * Builds the post shape from a plain-language topic, so the user never has to
+ * learn {placeholders}. "coding my app" → "Day {n}/{total} of coding my app: {text}".
+ */
+export function templateFor(topic: string) {
+  const t = topic.trim().replace(/[{}]/g, ""); // braces would be read as placeholders
+  return t ? `Day {n}/{total} of ${t}: {text}` : DEFAULT_TEMPLATE;
+}
+
+/**
+ * Why a new series can't be created yet, as messages to show the user.
+ * Empty list = valid. Kept here (not in the form) so the rules are testable.
+ */
+export function seriesProblems(
+  s: Pick<Series, "startDate" | "time" | "channelIds">,
+  now = Date.now(),
+): string[] {
+  const problems: string[] = [];
+  if (s.channelIds.length === 0) problems.push("Pick at least one channel.");
+  if (!s.startDate || !s.time) {
+    problems.push("Pick a start date and time.");
+  } else if (dueAtFor(s, 1).getTime() <= now) {
+    // Buffer can't schedule in the past, so the first post must still be ahead of us.
+    problems.push("The first post is in the past. Pick a later start date or time.");
+  }
+  return problems;
+}
+
+/**
  * What still needs scheduling. Idempotent: days already in `posts` are skipped,
  * so "Schedule all" can be clicked again to retry only the failures.
  */
