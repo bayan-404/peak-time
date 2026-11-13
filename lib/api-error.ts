@@ -9,6 +9,12 @@ export function errorResponse(e: unknown) {
       { status: 503 },
     );
   }
+  if (e instanceof BufferApiError && e.code === "RATE_LIMITED") {
+    return NextResponse.json(
+      { error: "Buffer's rate limit is reached. Try again later.", retryAfter: e.info.retryAfter ?? 0 },
+      { status: 429 },
+    );
+  }
   console.error(e);
   return NextResponse.json(
     { error: "Could not reach Buffer. Check your API key and try again." },

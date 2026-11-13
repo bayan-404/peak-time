@@ -70,6 +70,9 @@ Metric names differ per network, so `toSample()` normalizes them: `reactions|lik
 - Metrics refresh **daily**, so data can lag ~24h. Show "last updated".
 - Free plans: analytics limited to the **last 31 days**, so expect small samples.
 - Rate limit is shared across all calls. Cache results ~10 min.
+- OAuth apps get their own limit: **100 requests / 15 min + 10 per authorized user**, shared by all users. A long series can't be created in one run.
+- Scheduling reads the `RateLimit` header and stops when a window is nearly empty; on a `429` it reports `Retry-After`. The series is resumable, so the user just clicks again later.
+- `createPost` has no idempotency key. A batch is marked `pending` before it is sent; if no answer comes back, the next run asks Buffer what exists (`/api/series/reconcile`) before creating anything.
 - Metrics vary by network. Reactions + comments are always present; impressions only on some.
 
 ## 6. Analysis rules (`lib/analyze.ts`)

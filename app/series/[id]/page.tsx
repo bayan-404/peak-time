@@ -4,12 +4,17 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { CHECK_IN_TEXT, dayKey, dueAtFor, renderDay, schedulePlan, type Series } from "@/lib/series";
+import { CHECK_IN_TEXT, dayKey, dueAtFor, formatWait, renderDay, schedulePlan, type Series } from "@/lib/series";
 import { getSeries, saveSeries } from "@/lib/series-store";
 import type { Channel } from "@/lib/types";
 
 const BATCH = 10; // must match the API's MAX_BATCH
-type Result = { key: string; postId?: string; dueAt?: string; error?: string };
+type Result = { key: string; postId?: string; dueAt?: string; error?: string; unknown?: boolean };
+
+const UNKNOWN_OUTCOME =
+  "Lost the connection before Buffer answered. Click the button again: it checks what reached Buffer first, so nothing is posted twice.";
+const rateLimitMessage = (seconds: number) =>
+  `Buffer's rate limit is reached. Everything scheduled so far is saved. Click the button again in about ${formatWait(seconds)}.`;
 
 export default function SeriesDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -43,49 +48,101 @@ export default function SeriesDetailPage() {
     if (!series || !plan || plan.items.length === 0) return;
     setError("");
     setFailures({});
-    const items = plan.items;
-    setProgress({ done: 0, total: items.length });
+    setProgress({ done: 0, total: plan.items.length });
+    try {
+      await runSchedule(series);
+    } catch {
+      // The request itself failed, so we don't know what Buffer received.
+      setError(UNKNOWN_OUTCOME);
+    } finally {
+      setProgress(null);
+    }
+  }
 
+  async function runSchedule(start: Series) {
     // Refresh the token once up front, so batches never race a refresh.
     const me = await fetch("/api/auth/me").then((r) => r.json());
-    if (!me.connected) {
-      setProgress(null);
-      return setError("Your Buffer connection expired. Reconnect on the series list.");
+    if (!me.connected) return setError("Your Buffer connection expired. Reconnect on the series list.");
+
+    let cur = start;
+
+    // An earlier run ended without an answer for these posts. Ask Buffer which
+    // ones exist before creating anything, or they would be posted twice.
+    if (cur.pending?.length) {
+      const unsure = schedulePlan(cur).items.filter((it) => cur.pending!.includes(it.key));
+      const posts = { ...cur.posts };
+      if (unsure.length > 0) {
+        const res = await fetch("/api/series/reconcile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: unsure.map(({ key, channelId, dueAt }) => ({ key, channelId, dueAt })) }),
+        });
+        const data = (await res.json().catch(() => ({}))) as { found?: Result[]; error?: string; retryAfter?: number };
+        if (!data.found) {
+          return setError(
+            data.retryAfter ? rateLimitMessage(data.retryAfter) : (data.error ?? "Could not check Buffer. Try again."),
+          );
+        }
+        for (const r of data.found) posts[r.key] = { postId: r.postId!, dueAt: r.dueAt! };
+      }
+      cur = { ...cur, posts, pending: undefined };
+      update(cur);
     }
 
-    let cur = series;
+    const items = schedulePlan(cur).items;
+    setProgress({ done: 0, total: items.length });
     const failed: Record<string, string> = {};
     for (let i = 0; i < items.length; i += BATCH) {
       const batch = items.slice(i, i + BATCH);
+      // Mark the batch as in flight first: if the tab closes or the network
+      // drops before the answer arrives, the next run knows to check Buffer.
+      cur = { ...cur, pending: batch.map((b) => b.key) };
+      update(cur);
+
       const res = await fetch("/api/series/schedule", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items: batch.map(({ key, channelId, text, dueAt }) => ({ key, channelId, text, dueAt })) }),
       });
-      const data = (await res.json().catch(() => ({ error: "Server error" }))) as { results?: Result[]; error?: string };
-      if (!data.results) {
-        setError(data.error ?? "Scheduling stopped.");
-        break;
+      const data = (await res.json().catch(() => null)) as {
+        results?: Result[];
+        retryAfter?: number | null;
+        error?: string;
+      } | null;
+      if (!data?.results) {
+        // A 4xx with a message was refused before anything reached Buffer.
+        if (res.status < 500 && data?.error) {
+          update({ ...cur, pending: undefined });
+          return setError(data.error);
+        }
+        return setError(UNKNOWN_OUTCOME);
       }
 
       const posts = { ...cur.posts };
+      const unknown: string[] = [];
       for (const r of data.results) {
         if (r.postId) posts[r.key] = { postId: r.postId, dueAt: r.dueAt! };
+        else if (r.unknown) unknown.push(r.key);
         else failed[r.key] = r.error ?? "Failed";
       }
       // Save after every batch so a closed tab never loses what Buffer already has.
-      cur = { ...cur, posts };
+      cur = { ...cur, posts, pending: unknown.length > 0 ? unknown : undefined };
       update(cur);
       setFailures({ ...failed });
-      setProgress({ done: Math.min(i + BATCH, items.length), total: items.length });
+      setProgress({ done: Math.min(i + data.results.length, items.length), total: items.length });
+
+      if (unknown.length > 0) return setError(UNKNOWN_OUTCOME);
+
+      // Out of quota with posts still to go: stop and say when to come back.
+      if (data.retryAfter != null && i + data.results.length < items.length) {
+        return setError(rateLimitMessage(data.retryAfter));
+      }
 
       // A whole batch failing usually means a plan limit or bad token: stop, don't hammer.
-      if (data.results.every((r) => r.error)) {
-        setError(`Stopped: ${data.results[0].error}`);
-        break;
+      if (data.results.length > 0 && data.results.every((r) => r.error)) {
+        return setError(`Stopped: ${data.results[0].error}`);
       }
     }
-    setProgress(null);
   }
 
   if (series === undefined) return null;
@@ -124,7 +181,7 @@ export default function SeriesDetailPage() {
         >
           {progress
             ? `Scheduling ${progress.done}/${progress.total}…`
-            : failCount > 0
+            : failCount > 0 || error
               ? `Retry ${plan?.items.length} remaining`
               : `Schedule all ${plan?.items.length ?? 0} posts`}
         </button>
