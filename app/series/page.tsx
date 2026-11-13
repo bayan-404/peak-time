@@ -19,6 +19,8 @@ import {
 } from "@/lib/series";
 import { deleteSeries, loadAll, saveSeries } from "@/lib/series-store";
 import type { Channel } from "@/lib/types";
+import { Logo } from "@/components/Logo";
+import Welcome from "@/components/Welcome";
 
 const input = "w-full rounded-md border px-3 py-2 bg-transparent";
 
@@ -106,19 +108,20 @@ export default function SeriesListPage() {
   return (
     <main className="mx-auto max-w-xl px-4 py-10 space-y-8">
       <header className="space-y-1">
-        <h1 className="text-3xl font-bold">Streakline</h1>
-        <p className="opacity-70">Plan a “Day N of X” series and schedule every day to Buffer in one click.</p>
+        <h1>
+          <Logo />
+        </h1>
+        {connected && (
+          <p className="opacity-70">Plan a “Day N of X” series and schedule every day to Buffer in one click.</p>
+        )}
       </header>
 
       {error && <p className="text-red-600">{error}</p>}
 
-      {connected === false && (
-        <a href="/api/auth/login" className="inline-block rounded-md bg-[var(--accent)] px-4 py-2 text-white">
-          Connect Buffer
-        </a>
-      )}
+      {connected === false && <Welcome />}
 
-      {list.length > 0 && (
+      {/* Hidden while disconnected: the series stay saved and return on reconnect. */}
+      {connected && list.length > 0 && (
         <section className="space-y-2">
           <h2 className="font-semibold">Your series</h2>
           {list.map((s) => (
@@ -130,7 +133,7 @@ export default function SeriesListPage() {
                   {Object.keys(s.posts).length} posts scheduled
                 </div>
               </Link>
-              <button onClick={() => remove(s.id)} className="text-sm opacity-60 hover:opacity-100">
+              <button onClick={() => remove(s.id)} className="text-sm opacity-60 transition-colors hover:text-red-600 hover:opacity-100 dark:hover:text-red-400">
                 Delete
               </button>
             </div>
@@ -139,7 +142,7 @@ export default function SeriesListPage() {
       )}
 
       {connected && (
-        <form onSubmit={create} className="space-y-4">
+        <form onSubmit={create} className="space-y-4 rounded-2xl bg-black/[.04] p-5 sm:p-6 dark:bg-white/[.06]">
           <div className="flex justify-between">
             <h2 className="font-semibold">New series</h2>
             <button type="button" onClick={logout} className="text-sm underline opacity-70">
