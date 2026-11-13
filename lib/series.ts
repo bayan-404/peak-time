@@ -51,9 +51,19 @@ export function dueAtFor(s: Pick<Series, "startDate" | "time" | "skips">, n: num
   return new Date(y, m - 1, d + n - 1 + delay, hh, mm);
 }
 
-/** Pushes day `n` and every later day back by one day. No day is dropped. */
-export function skipDay(s: Series, n: number): Series {
-  return { ...s, skips: [...(s.skips ?? []), n] };
+/** Pushes day `n` and every later day back by `days` days. No day is dropped. */
+export function skipDay(s: Series, n: number, days = 1): Series {
+  return { ...s, skips: [...(s.skips ?? []), ...Array<number>(Math.max(0, days)).fill(n)] };
+}
+
+/**
+ * Whole days from `from` to a "YYYY-MM-DD" date. Counted on calendar dates
+ * (not milliseconds) so a daylight-saving change never makes it off by one.
+ */
+export function daysUntil(from: Date, dateInput: string) {
+  const [y, m, d] = dateInput.split("-").map(Number);
+  if (!y || !m || !d) return NaN;
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(from.getFullYear(), from.getMonth(), from.getDate())) / 86_400_000);
 }
 
 export type MoveItem = { key: string; postId: string; text: string; dueAt: string };

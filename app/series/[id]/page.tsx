@@ -7,12 +7,14 @@ import { useEffect, useMemo, useState } from "react";
 import {
   CHECK_IN_TEXT,
   dayKey,
+  daysUntil,
   dueAtFor,
   formatWait,
   movePlan,
   renderDay,
   schedulePlan,
   skipDay,
+  toDateInput,
   type MoveItem,
   type Series,
 } from "@/lib/series";
@@ -42,6 +44,8 @@ export default function SeriesDetailPage() {
   const [failures, setFailures] = useState<Record<string, string>>({});
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState("");
+  // Which day's "move to another date" picker is open, and the date chosen in it.
+  const [moving, setMoving] = useState<{ day: number; date: string } | null>(null);
 
   useEffect(() => {
     setSeries(getSeries(id));
@@ -166,18 +170,26 @@ export default function SeriesDetailPage() {
     }
   }
 
-  /** "I didn't show up": push this day and every later day back by one. */
-  async function skip(day: number) {
+  const dayLabel = (d: Date) => d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  const addDays = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+
+  /** "I won't show up that day": move this day to a later date. Later days follow by the same amount. */
+  async function moveDay(day: number, date: string) {
     if (!series || progress) return;
+    const from = dueAtFor(series, day);
+    const days = daysUntil(from, date);
+    if (!(days >= 1)) return;
     const inBuffer = Object.keys(series.posts).filter((k) => Number(k.split(":")[0]) >= day).length;
+    const later = series.total > day ? ` Every day after it moves ${days} day${days === 1 ? "" : "s"} later too, so no day is dropped.` : "";
     const ok = confirm(
-      `Push Day ${day} and every day after it back by one day? No day is dropped.` +
-        (inBuffer > 0 ? `\n\n${inBuffer} post${inBuffer === 1 ? "" : "s"} already in Buffer will be moved.` : ""),
+      `Move Day ${day} from ${dayLabel(from)} to ${dayLabel(addDays(from, days))}?${later}` +
+        (inBuffer > 0 ? `\n\n${inBuffer} post${inBuffer === 1 ? "" : "s"} already in Buffer will be updated.` : ""),
     );
     if (!ok) return;
-    // Save the new plan first. If moving is interrupted, the posts still on
-    // their old date show up in `moves` and can be moved later.
-    const next = skipDay(series, day);
+    setMoving(null);
+    // Save the new plan first. If updating Buffer is interrupted, the posts
+    // still on their old date show up in `moves` and can be finished later.
+    const next = skipDay(series, day, days);
     update(next);
     await moveAll(next);
   }
@@ -251,9 +263,7 @@ export default function SeriesDetailPage() {
   const failCount = Object.keys(failures).length;
   // Nothing left to schedule and at least one post is in Buffer.
   const allDone = !!plan && plan.items.length === 0 && plan.done > 0 && !progress && moves.length === 0;
-  // The next day that has not gone out yet: the only one that can still be skipped.
   const now = Date.now();
-  const nextDay = Array.from({ length: series.total }, (_, i) => i + 1).find((n) => dueAtFor(series, n).getTime() > now);
   const skipCount = series.skips?.length ?? 0;
 
   return (
@@ -269,6 +279,13 @@ export default function SeriesDetailPage() {
       </header>
 
       <section className="sticky top-0 z-10 rounded-xl border bg-[var(--background)] p-4 space-y-2">
+        {moves.length > 0 && !progress && (
+          // Only shown when updating Buffer after a date change did not finish.
+          <p className="text-sm">
+            You changed the dates, but {moves.length} post{moves.length === 1 ? " is" : "s are"} still on the old date in
+            Buffer.
+          </p>
+        )}
         {plan && (
           <p className="text-sm">
             <b>{plan.done}</b> scheduled · <b>{plan.items.length}</b> to schedule
@@ -285,7 +302,7 @@ export default function SeriesDetailPage() {
             >
               {progress
                 ? `${progress.label} ${progress.done}/${progress.total}…`
-                : `Move ${moves.length} post${moves.length === 1 ? "" : "s"} to the new dates`}
+                : `Finish updating ${moves.length} post${moves.length === 1 ? "" : "s"} in Buffer`}
             </button>
           ) : allDone ? (
             // Done: the next useful step is checking the queue in Buffer.
@@ -359,16 +376,39 @@ export default function SeriesDetailPage() {
               />
               <p className="text-xs opacity-60 whitespace-pre-wrap">{renderDay(series.template, n, series.total, series.notes[n])}</p>
               {keys.map((k) => failures[k] && <p key={k} className="text-xs text-red-600">{failures[k]}</p>)}
-              {n === nextDay && (
-                <button
-                  onClick={() => skip(n)}
-                  // While an earlier run is unconfirmed, dates must not change under it.
-                  disabled={!!progress || !!series.pending?.length}
-                  className="text-xs underline opacity-70 hover:opacity-100 disabled:opacity-40"
-                >
-                  Didn&apos;t show up? Push back a day
-                </button>
-              )}
+              {due.getTime() > now &&
+                (moving?.day === n ? (
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span>Move Day {n} to</span>
+                    <input
+                      type="date"
+                      value={moving.date}
+                      min={toDateInput(addDays(due, 1))}
+                      onChange={(e) => setMoving({ day: n, date: e.target.value })}
+                      className="rounded-md border bg-transparent px-2 py-1"
+                    />
+                    <button
+                      onClick={() => moveDay(n, moving.date)}
+                      disabled={!(daysUntil(due, moving.date) >= 1)}
+                      className="rounded-md bg-[var(--accent)] px-2 py-1 text-white disabled:opacity-50"
+                    >
+                      Move
+                    </button>
+                    <button onClick={() => setMoving(null)} className="underline opacity-70">
+                      Cancel
+                    </button>
+                    {series.total > n && <span className="opacity-60">Later days follow by the same amount.</span>}
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setMoving({ day: n, date: toDateInput(addDays(due, 1)) })}
+                    // While an earlier run is unconfirmed, dates must not change under it.
+                    disabled={!!progress || !!series.pending?.length}
+                    className="text-xs underline opacity-70 hover:opacity-100 disabled:opacity-40"
+                  >
+                    Can&apos;t show up? Move to another date
+                  </button>
+                ))}
             </li>
           );
         })}
