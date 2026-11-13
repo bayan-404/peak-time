@@ -56,7 +56,7 @@ export function skipDay(s: Series, n: number): Series {
   return { ...s, skips: [...(s.skips ?? []), n] };
 }
 
-export type MoveItem = { key: string; postId: string; dueAt: string };
+export type MoveItem = { key: string; postId: string; text: string; dueAt: string };
 
 const sameMinute = (a: string, b: Date) => Math.floor(Date.parse(a) / 60000) === Math.floor(b.getTime() / 60000);
 
@@ -75,7 +75,10 @@ export function movePlan(s: Series, now = Date.now()): MoveItem[] {
       const post = s.posts[key];
       // A post whose old time has passed was already published: nothing to move.
       if (!post || Date.parse(post.dueAt) <= now || sameMinute(post.dueAt, due)) continue;
-      items.push({ key, postId: post.postId, dueAt: due.toISOString() });
+      // Buffer rejects an edit without text, so the post's text is sent again.
+      // Notes are locked once a day is scheduled, so this equals what Buffer has.
+      const text = renderDay(s.template, n, s.total, s.notes[n]);
+      items.push({ key, postId: post.postId, text, dueAt: due.toISOString() });
     }
   }
   return items;

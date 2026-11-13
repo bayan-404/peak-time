@@ -234,12 +234,13 @@ export async function createScheduledPost(
 }
 
 /**
- * Moves a scheduled post to a new time, keeping its text. Safe to repeat:
- * sending the same time twice changes nothing.
+ * Moves a scheduled post to a new time. Safe to repeat: sending the same
+ * time twice changes nothing. The text must be sent along: Buffer answers
+ * "Post must have either text or media" to an edit that leaves it out.
  */
 export async function moveScheduledPost(
   token: string,
-  input: { id: string; dueAt: string },
+  input: { id: string; text: string; dueAt: string },
 ): Promise<{ dueAt: string; lowQuota: number | null }> {
   const { data, lowQuota } = await bufferRequest<{
     editPost: { __typename: string; post?: { id: string; dueAt: string | null }; message?: string };
@@ -251,7 +252,6 @@ export async function moveScheduledPost(
         ... on MutationError { message }
       }
     }`,
-    // Text is omitted on purpose: Buffer keeps the current text when it is left out.
     { input: { ...input, mode: "customScheduled" } },
     token,
   );

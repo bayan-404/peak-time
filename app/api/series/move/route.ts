@@ -4,7 +4,7 @@ import { getAccessToken } from "@/lib/oauth";
 
 const MAX_BATCH = 10; // same size as a schedule batch
 
-type Item = { key: string; postId: string; dueAt: string };
+type Item = { key: string; postId: string; text: string; dueAt: string };
 type MoveResult = { key: string; dueAt?: string; error?: string };
 
 /**
@@ -29,7 +29,7 @@ export async function POST(req: Request) {
   // Sequential on purpose: Buffer's rate limit is shared per client.
   for (const it of items) {
     const when = Date.parse(it?.dueAt);
-    if (!it?.key || !it.postId || Number.isNaN(when)) {
+    if (!it?.key || !it.postId || !it.text?.trim() || Number.isNaN(when)) {
       results.push({ key: it?.key, error: "Invalid item." });
       continue;
     }
@@ -40,6 +40,7 @@ export async function POST(req: Request) {
     try {
       const { dueAt, lowQuota } = await moveScheduledPost(token, {
         id: it.postId,
+        text: it.text.trim(),
         dueAt: new Date(when).toISOString(),
       });
       results.push({ key: it.key, dueAt });
