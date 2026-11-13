@@ -50,7 +50,7 @@ function DayTiles() {
 
 const STEPS = [
   ["Connect Buffer", "So Streakline can schedule to your channels."],
-  ["Set up your challenge", "Number of days, start date, time, and where to post."],
+  ["Set up your challenge", "Number of days, how often, start date, time, and where to post."],
   ["Write and schedule", "Add a short note per day, then send them all at once."],
 ];
 
