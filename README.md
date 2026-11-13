@@ -20,10 +20,10 @@ Streakline gives you **one simple place to plan the posts and manage the content
 
 A typical run:
 
-1. Sam connects their Buffer account.
-2. Sam sets up "30 days of coding my app": 30 days, weekdays at 9:00, starting Monday, on LinkedIn and X.
-3. Sam writes a short note for each day and clicks **Schedule all**.
-4. In week two Sam is travelling on Thursday, so they move that day to Friday. Every later day follows, and the posts already in Buffer are updated.
+1. A creator connects their Buffer account.
+2. A creator sets up "30 days of coding my app": 30 days, weekdays at 9:00, starting Monday, on LinkedIn and X.
+3. A creator writes a short note for each day and clicks **Schedule all**.
+4. In week two the creator is travelling on Thursday, so they move that day to Friday. Every later day follows, and the posts already in Buffer are updated.
 
 ## Features
 
