@@ -12,11 +12,12 @@ type Item = { key: string; channelId: string; text: string; dueAt: string };
 type ScheduleResult = { key: string; postId?: string; dueAt?: string; error?: string; unknown?: boolean };
 
 /**
- * POST { items: Item[] } → { results: ScheduleResult[], retryAfter: number | null }
+ * POST { items: Item[] } → { results: ScheduleResult[], retryAfter: number | null, limit: string | null }
  *
  * Results are in item order but can be shorter than `items`: the batch stops
- * early at a rate limit (`retryAfter` = seconds to wait) or at an unknown
- * outcome. Items without a result were never sent to Buffer.
+ * early at a rate limit (`retryAfter` = seconds to wait), at a plan limit
+ * (`limit` = Buffer's message) or at an unknown outcome. Items without a
+ * result were not created in Buffer.
  */
 export async function POST(req: Request) {
   const token = await getAccessToken().catch(() => null);
@@ -30,6 +31,7 @@ export async function POST(req: Request) {
 
   const results: ScheduleResult[] = [];
   let retryAfter: number | null = null;
+  let limit: string | null = null;
   // Sequential on purpose: Buffer's rate limit is shared per client.
   for (const it of items) {
     const when = Date.parse(it?.dueAt);
@@ -59,6 +61,12 @@ export async function POST(req: Request) {
         retryAfter = e.info.retryAfter ?? 0;
         break;
       }
+      // The Buffer plan has no room for more scheduled posts. Nothing is wrong
+      // with this post, so it is not reported as failed.
+      if (e instanceof BufferApiError && e.code === "LIMIT_REACHED") {
+        limit = e.message;
+        break;
+      }
       console.error(e);
       // A network failure or 5xx doesn't say whether Buffer saved the post.
       // Never retry that blindly: the client checks Buffer first.
@@ -70,5 +78,5 @@ export async function POST(req: Request) {
       results.push({ key: it.key, error: e.message });
     }
   }
-  return NextResponse.json({ results, retryAfter });
+  return NextResponse.json({ results, retryAfter, limit });
 }

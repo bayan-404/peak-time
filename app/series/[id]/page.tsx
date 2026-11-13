@@ -48,6 +48,8 @@ export default function SeriesDetailPage() {
   const [failures, setFailures] = useState<Record<string, string>>({});
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState("");
+  // Buffer's own words when the plan has no room for more scheduled posts.
+  const [limit, setLimit] = useState("");
   // Which day's "move to another date" picker is open, and the date chosen in it.
   const [moving, setMoving] = useState<{ day: number; date: string } | null>(null);
 
@@ -77,6 +79,7 @@ export default function SeriesDetailPage() {
   async function scheduleAll() {
     if (!series || !plan || plan.items.length === 0) return;
     setError("");
+    setLimit("");
     setFailures({});
     setProgress({ done: 0, total: plan.items.length, label: "Scheduling" });
     try {
@@ -137,6 +140,7 @@ export default function SeriesDetailPage() {
       const data = (await res.json().catch(() => null)) as {
         results?: Result[];
         retryAfter?: number | null;
+        limit?: string | null;
         error?: string;
       } | null;
       if (!data?.results) {
@@ -162,6 +166,9 @@ export default function SeriesDetailPage() {
       setProgress({ done: Math.min(i + data.results.length, items.length), total: items.length, label: "Scheduling" });
 
       if (unknown.length > 0) return setError(UNKNOWN_OUTCOME);
+
+      // The Buffer plan is full. The rest stay "not scheduled", not failed.
+      if (data.limit) return setLimit(data.limit);
 
       // Out of quota with posts still to go: stop and say when to come back.
       if (data.retryAfter != null && i + data.results.length < items.length) {
@@ -333,9 +340,11 @@ export default function SeriesDetailPage() {
             >
               {progress
                 ? `${progress.label} ${progress.done}/${progress.total}…`
-                : failCount > 0 || error
-                  ? `Retry ${plan?.items.length} remaining`
-                  : `Schedule all ${plan?.items.length ?? 0} posts`}
+                : limit
+                  ? `Schedule the next ${plan?.items.length} posts`
+                  : failCount > 0 || error
+                    ? `Retry ${plan?.items.length} remaining`
+                    : `Schedule all ${plan?.items.length ?? 0} posts`}
             </button>
           )}
           {!allDone && !!plan && plan.done > 0 && (
@@ -344,6 +353,16 @@ export default function SeriesDetailPage() {
             </a>
           )}
         </div>
+        {limit && plan && (
+          <div className="rounded-md bg-amber-500/15 px-3 py-2 text-sm space-y-1">
+            <p className="font-medium">Your Buffer plan is full for now.</p>
+            <p>
+              Buffer says: “{limit}” {plan.done > 0 && <>The first {plan.done} are scheduled. </>}
+              Space frees up as posts go out, so come back and click the button to schedule the next ones. To schedule
+              them all at once, upgrade your Buffer plan or delete other scheduled posts in Buffer.
+            </p>
+          </div>
+        )}
         {error && <p className="text-sm text-red-600">{error}</p>}
         {failCount > 0 && !error && <p className="text-sm text-red-600">{failCount} failed. See the days below.</p>}
       </section>
