@@ -4,7 +4,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { DEFAULT_TEMPLATE, MAX_DAYS, renderDay, seriesProblems, toDateInput, type Series } from "@/lib/series";
+import { MAX_DAYS, renderDay, seriesProblems, templateFor, toDateInput, type Series } from "@/lib/series";
 import { deleteSeries, loadAll, saveSeries } from "@/lib/series-store";
 import type { Channel } from "@/lib/types";
 
@@ -28,7 +28,7 @@ export default function SeriesListPage() {
   const [startDate, setStartDate] = useState(tomorrow);
   const [time, setTime] = useState("09:00");
   const [channelIds, setChannelIds] = useState<string[]>([]);
-  const [template, setTemplate] = useState(DEFAULT_TEMPLATE);
+  const [topic, setTopic] = useState("");
 
   useEffect(() => {
     setList(loadAll());
@@ -55,14 +55,16 @@ export default function SeriesListPage() {
   }
 
   // Recomputed on every render, so the messages update as the user types.
-  const problems = seriesProblems({ startDate, time, channelIds, template });
+  const problems = seriesProblems({ startDate, time, channelIds });
+  // We build the post wording from the topic, so there is no template to get wrong.
+  const template = templateFor(topic);
 
   function create(e: React.FormEvent) {
     e.preventDefault();
     if (problems.length > 0) return;
     const s: Series = {
       id: crypto.randomUUID(),
-      name: name.trim() || `${total}-day series`,
+      name: name.trim() || (topic.trim() ? `${total} days of ${topic.trim()}` : `${total}-day series`),
       total,
       startDate,
       time,
@@ -178,11 +180,14 @@ export default function SeriesListPage() {
 
           <label className="block space-y-1">
             <span className="text-sm">
-              Template <span className="opacity-60">· {"{n}"} {"{total}"} {"{text}"}</span>
+              What is the challenge about? <span className="opacity-60">· optional</span>
             </span>
-            <input value={template} onChange={(e) => setTemplate(e.target.value)} className={input} />
+            <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="coding my app" className={input} />
           </label>
-          <p className="rounded-xl border p-3 text-sm opacity-80">{renderDay(template, 1, total, "")}</p>
+          <div className="space-y-1">
+            <span className="text-sm opacity-60">Your posts will look like this. You write each day&apos;s note on the next page.</span>
+            <p className="rounded-xl border p-3 text-sm opacity-80">{renderDay(template, 1, total, "")}</p>
+          </div>
 
           {problems.length > 0 && (
             <ul role="alert" className="space-y-1 text-sm text-red-600">

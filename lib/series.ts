@@ -44,18 +44,24 @@ export function dueAtFor(s: Pick<Series, "startDate" | "time">, n: number): Date
 }
 
 /**
+ * Builds the post shape from a plain-language topic, so the user never has to
+ * learn {placeholders}. "coding my app" → "Day {n}/{total} of coding my app: {text}".
+ */
+export function templateFor(topic: string) {
+  const t = topic.trim().replace(/[{}]/g, ""); // braces would be read as placeholders
+  return t ? `Day {n}/{total} of ${t}: {text}` : DEFAULT_TEMPLATE;
+}
+
+/**
  * Why a new series can't be created yet, as messages to show the user.
  * Empty list = valid. Kept here (not in the form) so the rules are testable.
  */
 export function seriesProblems(
-  s: Pick<Series, "startDate" | "time" | "channelIds" | "template">,
+  s: Pick<Series, "startDate" | "time" | "channelIds">,
   now = Date.now(),
 ): string[] {
   const problems: string[] = [];
   if (s.channelIds.length === 0) problems.push("Pick at least one channel.");
-  if (!s.template.includes("{n}")) {
-    problems.push("Add {n} to the template so each day gets its own number, e.g. \"Day {n} of {total}\".");
-  }
   if (!s.startDate || !s.time) {
     problems.push("Pick a start date and time.");
   } else if (dueAtFor(s, 1).getTime() <= now) {
